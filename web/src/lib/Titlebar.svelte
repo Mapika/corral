@@ -4,7 +4,7 @@
   // same bar renders without the window buttons. There is deliberately no second header below.
   import Icon from './Icon.svelte';
 
-  let { crumb = null, running = 0, back = null, onHome, onBack, onRunning, onPush } = $props();
+  let { crumb = null, running = 0, back = null, onHome, onBack, onRunning, onPush, onPhone } = $props();
 
   const inTauri = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__;
   let appWin = null;
@@ -38,6 +38,9 @@
   <span class="sp" data-tauri-drag-region></span>
   {#if running}
     <button class="run" onclick={() => onRunning?.()} title="Show running sessions"><span class="livedot"></span>{running} running</button>
+  {/if}
+  {#if onPhone}
+    <button class="bell" onclick={() => onPhone?.()} title="Ranch from your phone" aria-label="Phone pairing"><Icon name="phone" size={13} /></button>
   {/if}
   {#if onPush}
     <button class="bell" onclick={() => onPush?.()} title="Push notifications" aria-label="Push notifications"><Icon name="bell" size={13} /></button>

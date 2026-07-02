@@ -9,6 +9,7 @@
   import Dashboard from './Dashboard.svelte';
   import FleetGrid from './FleetGrid.svelte';
   import PushSettings from './PushSettings.svelte';
+  import RemoteAccess from './RemoteAccess.svelte';
   import CommandPalette from './CommandPalette.svelte';
   import DirPicker from './DirPicker.svelte';
   import Toasts from './lib/Toasts.svelte';
@@ -33,6 +34,7 @@
   let picker = $state(null);
   let paletteOpen = $state(false);
   let pushOpen = $state(false);
+  let remoteOpen = $state(false);
   let recentRoots = $state([]);
   let returnTo = $state(null);       // chat to jump back to after a session handoff (files/terminal/tunnels)
   let dashboardFilterRequest = $state(null);
@@ -395,7 +397,7 @@
             back={returnTo ? { label: returnTo.label || base(returnTo.cwd) } : null}
             onBack={() => { const t = returnTo; returnTo = null; selected = t; }}
             onHome={() => { returnTo = null; selected = null; }} onRunning={goRunning}
-            onPush={() => (pushOpen = true)} />
+            onPush={() => (pushOpen = true)} onPhone={() => (remoteOpen = true)} />
   <div class="app">
     <main class="main">
       {#if selected}
@@ -485,6 +487,10 @@
 
 {#if pushOpen}
   <PushSettings onclose={() => (pushOpen = false)} />
+{/if}
+
+{#if remoteOpen}
+  <RemoteAccess onclose={() => (remoteOpen = false)} />
 {/if}
 
 <Toasts />

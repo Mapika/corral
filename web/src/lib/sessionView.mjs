@@ -89,7 +89,9 @@ export function agentLabel(agent) {
 export function composerPlaceholder({ status = '', ended = false, project = '', agent = 'claude' } = {}) {
   if (ended || endedStates.has(status)) return 'Session ended.';
   if (status === 'busy') return agentLabel(agent) + ' is working...';
-  if (status === 'starting') return 'Opening ' + (project || 'session') + '...';
+  // "starting" must invite input, not ask for patience: a headless agent (claude -p) emits
+  // nothing until the first message arrives, so waiting on it waits forever.
+  if (status === 'starting') return 'Message ' + (project || 'the agent') + ' - it wakes on your first message...';
   if (status === 'dormant') return 'Session is parked.';
   return 'Message ' + (project || 'the agent') + '...';
 }

@@ -1,6 +1,7 @@
 <script>
   import { chatSocket, killSession, removeSession, gitDiff, setSessionLabel, uploadFile } from './lib/api.js';
   import { apiErrorMessage } from './lib/apiRequest.mjs';
+  import { createChatState, handleChatEvent } from './lib/chatStream.mjs';
   import { renderMarkdown, highlightCode } from './lib/markdown.js';
   import { prettyModel } from './lib/format.js';
   import { buildChangeCopyText, buildChangeReviewPrompt, changeSummaryLabel, copyChangeSummaryText } from './lib/changeSummary.mjs';
@@ -12,23 +13,17 @@
   import Terminal from './Terminal.svelte';
   import Icon from './lib/Icon.svelte';
 
+  import { untrack } from 'svelte';
+
   let { session, onOpenFiles, onOpenTunnels, onOpenTerminal, onResume, onclose } = $props();   // session: { id, host, cwd, model, status }; onclose() when removed
 
-  let items = $state([]);                // transcript: op | asst | pill
-  let status = $state('');               // '', starting, busy, idle, exited, error
-  let model = $state(null);              // refined by system/init
+  let cs = $state(createChatState());    // transcript + stream state (lib/chatStream.mjs)
   let draft = $state('');
-  let stopped = $state(false);           // a Stop was requested; label the ending result
-  let usage = $state(null);              // { cost, in, out } from the last result event
   let atts = $state([]);                 // composer attachments: { name, pct, done, error }
   let dragOver = $state(false);
   let scrollEl;
   let composerEl;
   let ws = null;
-  let curAsst = null;                    // current assistant turn (groups streamed messages)
-  let live = [];                         // current message's live blocks, by content-block index
-  let toolById = {};
-  let permById = {};                     // pending permission cards by request id
   let disconnected = $state(false);      // stream dropped; reconnect loop is running
   let changes = $state(null);            // git-diff drawer: null = closed, else { loading } | { isRepo, diff, untracked }
   let filesOpen = $state(false);         // files drawer — browse the session cwd without leaving the chat
@@ -39,7 +34,9 @@
   let editingLabel = $state(false);
   let labelDraft = $state('');
 
-  let statusKey = $derived(status || session?.status || '');
+  let statusKey = $derived(cs.status || session?.status || '');
+  let model = $derived(cs.model);
+  let usage = $derived(cs.usage);
   let ended = $derived(statusKey === 'error' || statusKey === 'exited');
   let pathParts = $derived(sessionPathParts(session?.cwd));
   let hostLabel = $derived(sessionHostLabel(session?.host));
@@ -78,98 +75,12 @@
     });
   }
 
-  const esc = (s) => { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; };
-  const pushItem = (it) => { items.push(it); return items[items.length - 1]; };
   const scrollDown = () => { if (scrollEl) queueMicrotask(() => { scrollEl.scrollTop = scrollEl.scrollHeight; }); };
-  const ensureAsst = () => { if (!curAsst) curAsst = pushItem({ kind: 'asst', blocks: [] }); return curAsst; };
-  const safeJson = (s) => { try { return JSON.parse(s || '{}'); } catch (e) { return {}; } };
 
-  function summarize(input) {
-    if (!input || typeof input !== 'object') return '';
-    for (const k of ['command', 'file_path', 'path', 'pattern', 'url', 'description', 'prompt']) if (input[k]) return String(input[k]);
-    try { return JSON.stringify(input).slice(0, 140); } catch (e) { return ''; }
-  }
-  function toText(content) {
-    if (Array.isArray(content)) return content.map(c => (c && c.type === 'text') ? c.text : (typeof c === 'string' ? c : JSON.stringify(c))).join('\n');
-    return typeof content === 'string' ? content : JSON.stringify(content);
-  }
-
-  // Fallback path (non-streaming / reattach mid-turn): append a complete block from an assistant event.
-  function appendBlock(turn, b) {
-    if (b.type === 'text' && b.text) turn.blocks.push({ type: 'text', html: renderMarkdown(b.text) });
-    else if (b.type === 'thinking' && (b.thinking || b.text || '').trim()) turn.blocks.push({ type: 'thinking', text: b.thinking || b.text || '', open: false });
-    else if (b.type === 'tool_use') {
-      turn.blocks.push({ type: 'tool', id: b.id, name: b.name || 'tool', input: b.input, summary: summarize(b.input), result: null, isError: false, open: false });
-      if (b.id) toolById[b.id] = turn.blocks[turn.blocks.length - 1];
-    }
-  }
-
-  // Live token streaming: render deltas as plain text, then snap each block to full markdown on stop.
-  function onStream(ev) {
-    const e = ev.event; if (!e) return;
-    if (e.type === 'message_start') { ensureAsst(); live = []; return; }
-    if (e.type === 'content_block_start') {
-      const turn = ensureAsst(); const cb = e.content_block || {}; let blk;
-      if (cb.type === 'thinking') blk = { type: 'thinking', text: '', open: false };
-      else if (cb.type === 'tool_use') blk = { type: 'tool', id: cb.id, name: cb.name || 'tool', input: {}, summary: '', result: null, isError: false, open: false, _json: '' };
-      else blk = { type: 'text', html: '', _raw: '' };
-      turn.blocks.push(blk);
-      const ref = turn.blocks[turn.blocks.length - 1];
-      live[e.index] = ref;
-      if (cb.type === 'tool_use' && cb.id) toolById[cb.id] = ref;
-      scrollDown(); return;
-    }
-    if (e.type === 'content_block_delta') {
-      const blk = live[e.index]; if (!blk) return; const d = e.delta || {};
-      if (d.type === 'text_delta') { blk._raw += d.text || ''; blk.html = '<p style="white-space:pre-wrap;margin:0">' + esc(blk._raw) + '</p>'; }
-      else if (d.type === 'thinking_delta') { blk.text += d.thinking || ''; }
-      else if (d.type === 'input_json_delta') { blk._json += d.partial_json || ''; blk.summary = summarize(safeJson(blk._json)); }
-      scrollDown(); return;
-    }
-    if (e.type === 'content_block_stop') {
-      const blk = live[e.index]; if (!blk) return;
-      if (blk.type === 'text') blk.html = renderMarkdown(blk._raw);
-      else if (blk.type === 'tool') { blk.input = safeJson(blk._json); blk.summary = summarize(blk.input); }
-    }
-  }
-
+  // The transcript state machine lives in lib/chatStream.mjs (shared with the mobile console);
+  // it returns true whenever the view should follow the new content down.
   function handle(ev) {
-    switch (ev.type) {
-      case '_user': curAsst = null; live = []; pushItem({ kind: 'op', text: ev.text }); status = 'busy'; scrollDown(); break;
-      case 'stream_event': onStream(ev); break;
-      case 'assistant':
-        if (live.length === 0 && ev.message && Array.isArray(ev.message.content)) {
-          const turn = ensureAsst();
-          for (const b of ev.message.content) appendBlock(turn, b);
-          scrollDown();
-        }
-        break;
-      case 'user': {
-        const content = ev.message && ev.message.content;
-        if (Array.isArray(content)) for (const b of content) if (b.type === 'tool_result' && toolById[b.tool_use_id]) {
-          const t = toolById[b.tool_use_id]; t.result = toText(b.content); t.isError = !!b.is_error;
-        }
-        scrollDown(); break;
-      }
-      case 'result':
-        curAsst = null; live = []; status = 'idle';
-        // total_cost_usd is cumulative for the session; usage tokens are the turn just finished.
-        if (ev.usage || ev.total_cost_usd != null) usage = { cost: ev.total_cost_usd, in: ev.usage?.input_tokens, out: ev.usage?.output_tokens };
-        if (stopped) { stopped = false; pushItem({ kind: 'pill', text: 'Stopped' }); scrollDown(); }
-        break;
-      case 'system':
-        if (ev.subtype === 'api_retry') { pushItem({ kind: 'pill', text: 'Retrying - model busy' + (ev.error_status ? ' (' + ev.error_status + ')' : '') + '...' }); scrollDown(); }
-        else if (ev.subtype === 'init' && ev.model) model = ev.model;
-        break;
-      case '_permission_request': {
-        const p = pushItem({ kind: 'perm', id: ev.id, tool: ev.tool || 'tool', summary: summarize(ev.input), input: ev.input || {}, resolved: null });
-        permById[ev.id] = p; scrollDown(); break;
-      }
-      case '_permission_resolved': { const p = permById[ev.id]; if (p) p.resolved = ev.decision; break; }
-      case '_resumed': pushItem({ kind: 'pill', text: 'Resumed - continuing the conversation' }); status = 'idle'; scrollDown(); break;
-      case '_error': pushItem({ kind: 'pill', text: 'Error: ' + ev.message, err: true }); status = 'error'; scrollDown(); break;
-      case '_exit': pushItem({ kind: 'pill', text: 'Session ended' + (ev.code != null ? ' (code ' + ev.code + ')' : ''), err: true }); status = 'exited'; scrollDown(); break;
-    }
+    if (handleChatEvent(cs, ev, renderMarkdown)) scrollDown();
   }
 
   // --- usage readout (#5) ---
@@ -212,7 +123,7 @@
     ws.send(JSON.stringify({ type: 'input', text }));
     draft = ''; atts = [];
   }
-  function stop() { if (ws && ws.readyState === 1) { ws.send(JSON.stringify({ type: 'interrupt' })); stopped = true; } }
+  function stop() { if (ws && ws.readyState === 1) { ws.send(JSON.stringify({ type: 'interrupt' })); cs.stopped = true; } }
   function startLabelEdit() { labelDraft = label || pathParts.project; editingLabel = true; }
   async function saveLabel() {
     if (!editingLabel) return;
@@ -267,8 +178,8 @@
     if (!id) return;
     let sock = null, retryTimer = null, retries = 0, gone = false;
     const connect = () => {
-      items = []; toolById = {}; permById = {}; curAsst = null; live = []; stopped = false;
-      status = session.status || ''; model = session.model || null; usage = null;
+      cs = createChatState();
+      cs.status = session.status || ''; cs.model = session.model || null;
       sock = chatSocket(id);
       ws = sock;
       sock.onopen = () => { retries = 0; disconnected = false; };
@@ -276,13 +187,15 @@
       sock.onclose = () => {
         if (gone) return;
         disconnected = true;
-        if (status !== 'error' && status !== 'exited') status = '';
+        if (cs.status !== 'error' && cs.status !== 'exited') cs.status = '';
         retries += 1;
         retryTimer = setTimeout(connect, Math.min(8000, 500 * 2 ** Math.min(retries, 4)));
       };
     };
     atts = []; dragOver = false; disconnected = false; filesOpen = false; termOpen = false;
-    connect();
+    // untracked: connect() reassigns/reads `cs`, which must not become a dependency of this
+    // effect — the effect keys on the session id alone, or it would loop on its own writes.
+    untrack(() => connect());
     return () => { gone = true; clearTimeout(retryTimer); try { sock && sock.close(); } catch (x) {} };
   });
 
@@ -347,14 +260,14 @@
 
   <div class="scroll" bind:this={scrollEl}>
     <div class="col">
-      {#if items.length === 0}
+      {#if cs.items.length === 0}
         <div class="emptyturn">
           <span class="estate {statusView.tone}"><span class="lamp"></span>{statusView.label}</span>
           <b>{pathParts.project}</b>
           <span>{hostLabel}{#if model} / {prettyModel(model)}{/if} / {statusView.detail}</span>
         </div>
       {/if}
-      {#each items as it (it)}
+      {#each cs.items as it (it)}
         {#if it.kind === 'op'}
           <div class="turn op">
             <div class="eyebrow"><span class="pip"></span>You</div>

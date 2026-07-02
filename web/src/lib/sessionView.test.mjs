@@ -118,7 +118,7 @@ function givesFocusedPlaceholders() {
   assert.equal(agentLabel('codex'), 'Codex');
   assert.equal(agentLabel(undefined), 'Claude');
   assert.equal(agentLabel('unknown-agent'), 'Claude');
-  assert.equal(composerPlaceholder({ status: 'starting', project: 'codapp' }), 'Opening codapp...');
+  assert.equal(composerPlaceholder({ status: 'starting', project: 'codapp' }), 'Message codapp - it wakes on your first message...');
   assert.equal(composerPlaceholder({ status: 'dormant', project: 'codapp' }), 'Session is parked.');
   assert.equal(composerPlaceholder({ status: 'idle', project: 'codapp' }), 'Message codapp...');
   assert.equal(composerPlaceholder({ status: 'idle', ended: true, project: 'codapp' }), 'Session ended.');

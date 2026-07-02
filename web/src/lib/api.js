@@ -1,11 +1,18 @@
 import { requestJson, requestMutation, requestText } from './apiRequest.mjs';
+import { wsUrl } from './serverBase.mjs';
 
 // Tiny backend client. Token auth is a no-op in dev; the Tauri shell will inject one later via setToken().
 let TOKEN = '';
 export function setToken(t) { TOKEN = t || ''; }
+// Backend origin. '' = same origin (the usual case); a standalone client (mobile app) points this
+// at a paired corral server, e.g. 'http://192.168.0.24:7879'.
+let BASE = '';
+export function setServer(base) { BASE = base || ''; }
+export function getServer() { return BASE; }
+const abs = (path) => BASE + path;
 const headers = () => (TOKEN ? { Authorization: 'Bearer ' + TOKEN } : {});
-const json = (path, opts = {}) => requestJson(path, { ...opts, getHeaders: headers });
-const mutate = (path, opts = {}) => requestMutation(path, { ...opts, getHeaders: headers });
+const json = (path, opts = {}) => requestJson(abs(path), { ...opts, getHeaders: headers });
+const mutate = (path, opts = {}) => requestMutation(abs(path), { ...opts, getHeaders: headers });
 
 export async function listSessions() {
   return json('/api/chat/list');
@@ -19,13 +26,14 @@ export async function listServerStatus() {
   return json('/api/servers', { retries: 0 });
 }
 
-export async function launchSession({ host = 'local', dir = '', model, perm, agent, worktree } = {}) {
+export async function launchSession({ host = 'local', dir = '', model, perm, agent, worktree, prompt } = {}) {
   const q = new URLSearchParams({ host });
   if (dir) q.set('dir', dir);
   if (model) q.set('model', model);
   if (perm) q.set('perm', perm);
   if (agent) q.set('agent', agent);
   if (worktree) q.set('worktree', '1');
+  if (prompt) q.set('prompt', prompt);
   return json('/api/chat/launch?' + q.toString(), { method: 'POST', retries: 0 });
 }
 
@@ -49,6 +57,12 @@ export async function resumeSession(id) {
   return json('/api/chat/resume?id=' + encodeURIComponent(id), { method: 'POST', retries: 0 });
 }
 
+// One-tap answer to a roster-surfaced permission prompt (session.pendingPerm.id).
+export async function respondPermission(id, requestId, decision) {
+  const q = new URLSearchParams({ id, requestId, decision });
+  return json('/api/chat/permission?' + q.toString(), { method: 'POST', retries: 0 });
+}
+
 // --- files ---
 export async function lsDir(host, p) {
   return json('/api/ls?server=' + encodeURIComponent(host) + '&path=' + encodeURIComponent(p));
@@ -56,13 +70,13 @@ export async function lsDir(host, p) {
 // <img>/<iframe>/<a> can't set an Authorization header, so GET file/download URLs carry the token
 // as a ?tk= param (loopback, single-user — acceptable). No-op in dev (no token).
 export function fileUrl(host, p, opts = {}) {
-  let u = '/api/file?server=' + encodeURIComponent(host) + '&path=' + encodeURIComponent(p);
+  let u = abs('/api/file?server=' + encodeURIComponent(host) + '&path=' + encodeURIComponent(p));
   if (opts.dl) u += '&dl=1';
   if (TOKEN) u += '&tk=' + encodeURIComponent(TOKEN);
   return u;
 }
 export function dirDownloadUrl(host, p) {
-  let u = '/api/download-dir?server=' + encodeURIComponent(host) + '&path=' + encodeURIComponent(p);
+  let u = abs('/api/download-dir?server=' + encodeURIComponent(host) + '&path=' + encodeURIComponent(p));
   if (TOKEN) u += '&tk=' + encodeURIComponent(TOKEN);
   return u;
 }
@@ -87,7 +101,7 @@ export async function gitDiff(host, p) {
 export function uploadFile(host, dir, file, onProgress, name) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('PUT', '/api/upload?server=' + encodeURIComponent(host) + '&path=' + encodeURIComponent(dir) + '&name=' + encodeURIComponent(name || file.name));
+    xhr.open('PUT', abs('/api/upload?server=' + encodeURIComponent(host) + '&path=' + encodeURIComponent(dir) + '&name=' + encodeURIComponent(name || file.name)));
     if (TOKEN) xhr.setRequestHeader('Authorization', 'Bearer ' + TOKEN);
     xhr.upload.onprogress = (e) => { if (onProgress && e.lengthComputable) onProgress(e.loaded / e.total); };
     xhr.onload = () => { try { resolve(JSON.parse(xhr.responseText)); } catch (x) { resolve({ ok: xhr.status < 300 }); } };
@@ -97,8 +111,7 @@ export function uploadFile(host, dir, file, onProgress, name) {
 }
 
 export function chatSocket(id) {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(proto + '://' + location.host + '/chat?id=' + encodeURIComponent(id));
+  const ws = new WebSocket(wsUrl(BASE, '/chat?id=' + encodeURIComponent(id)));
   if (TOKEN) ws.addEventListener('open', () => ws.send(JSON.stringify({ type: 'auth', token: TOKEN })));
   return ws;
 }
@@ -106,8 +119,7 @@ export function chatSocket(id) {
 // /events push socket: the server streams {type:'sessions'|'tunnels'} snapshots on change, so the
 // app can stand down its polling while connected. Same first-frame auth as chatSocket.
 export function eventsSocket() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(proto + '://' + location.host + '/events');
+  const ws = new WebSocket(wsUrl(BASE, '/events'));
   if (TOKEN) ws.addEventListener('open', () => ws.send(JSON.stringify({ type: 'auth', token: TOKEN })));
   return ws;
 }
@@ -115,20 +127,28 @@ export function eventsSocket() {
 // /ws terminal bridge: local shell, plain ssh, or tmux attach. Raw PTY output arrives as text
 // frames; input goes as {type:'data'}, size changes as {type:'resize'}. Same first-frame auth.
 export function termSocket({ host = 'local', target = '', cwd = '', cols = 80, rows = 24 } = {}) {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const q = new URLSearchParams({ server: host, cols: String(cols), rows: String(rows) });
   if (target) q.set('target', target);
   if (cwd) q.set('cwd', cwd);
-  const ws = new WebSocket(proto + '://' + location.host + '/ws?' + q.toString());
+  const ws = new WebSocket(wsUrl(BASE, '/ws?' + q.toString()));
   if (TOKEN) ws.addEventListener('open', () => ws.send(JSON.stringify({ type: 'auth', token: TOKEN })));
   return ws;
 }
 
+// --- remote access (phone pairing) — loopback/desktop only; the server hides secrets otherwise ---
+export async function getRemoteConfig() { return json('/api/remote'); }
+export async function setRemoteConfig({ enabled, rotate } = {}) {
+  const q = new URLSearchParams();
+  if (enabled != null) q.set('enabled', enabled ? '1' : '0');
+  if (rotate) q.set('rotate', '1');
+  return json('/api/remote?' + q.toString(), { method: 'POST', retries: 0 });
+}
+
 // --- phone push (ntfy relay) ---
 export async function getPushConfig() { return json('/api/push'); }
-export async function setPushConfig({ enabled, server, topic, input, done, fail } = {}) {
+export async function setPushConfig({ enabled, actions, server, topic, input, done, fail } = {}) {
   const q = new URLSearchParams();
-  for (const [k, v] of [['enabled', enabled], ['input', input], ['done', done], ['fail', fail]]) if (v != null) q.set(k, v ? '1' : '0');
+  for (const [k, v] of [['enabled', enabled], ['actions', actions], ['input', input], ['done', done], ['fail', fail]]) if (v != null) q.set(k, v ? '1' : '0');
   if (server != null) q.set('server', server);
   if (topic != null) q.set('topic', topic);
   return json('/api/push?' + q.toString(), { method: 'POST', retries: 0 });

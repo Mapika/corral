@@ -28,7 +28,7 @@
     error = ''; busyAction = 'save';
     try {
       const r = await setPushConfig({
-        enabled: cfg.enabled, server: cfg.server, topic: cfg.topic,
+        enabled: cfg.enabled, actions: cfg.actions, server: cfg.server, topic: cfg.topic,
         input: cfg.events.input, done: cfg.events.done, fail: cfg.events.fail,
       });
       cfg = { ...r.config, topic: cfg.topic };
@@ -90,6 +90,14 @@
           </div>
         </div>
 
+        <div class="row">
+          <span class="olabel">One-tap</span>
+          <div class="checks">
+            <label class="check"><input type="checkbox" bind:checked={cfg.actions} /><span>Allow / Deny buttons on permission asks</span></label>
+            <span class="finehint">Needs remote access (phone pairing) on, and the phone on the same network. The buttons embed the pairing code — anyone who can read this topic could answer prompts, so keep it unguessable or self-host the relay.</span>
+          </div>
+        </div>
+
         {#if error}<div class="err" role="alert">{error}</div>{/if}
         {#if note}<div class="note">{note}</div>{/if}
       </div>
@@ -125,6 +133,7 @@
   .checks { display: grid; gap: 7px; }
   .check { display: inline-flex; align-items: center; gap: 9px; color: var(--text-dim); font-size: 12.5px; cursor: pointer; }
   .check input { accent-color: var(--text-dim); }
+  .finehint { color: var(--text-faint); font-size: 11px; line-height: 1.5; }
   .err { color: var(--alert); font-size: 12px; }
   .note { color: var(--text-dim); font: 11.5px var(--mono); }
   footer { display: flex; align-items: center; gap: 9px; padding: var(--s3) var(--s4) var(--s4); border-top: 1px solid var(--seam); }
