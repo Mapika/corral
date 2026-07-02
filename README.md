@@ -79,4 +79,4 @@ data dir keep working.)
 
 ## License
 
-[MIT](LICENSE) © Mark Marosi ([@Mapika](https://github.com/Mapika))
+MIT
