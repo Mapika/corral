@@ -2,11 +2,12 @@
   // Full-screen chat: the same wire protocol as the desktop view (lib/chatStream.mjs), reshaped
   // for a thumb — sticky composer, and permission prompts docked as a decision sheet above it.
   import { untrack } from 'svelte';
-  import { chatSocket, gitDiff, killSession, removeSession, resumeSession, setSessionLabel } from '../lib/api.js';
+  import { chatSocket, gitDiff, killSession, removeSession, resumeSession, setSessionLabel, uploadFile } from '../lib/api.js';
   import { createChatState, handleChatEvent, openPermissions } from '../lib/chatStream.mjs';
+  import { uploadMessage } from '../lib/fileUploads.mjs';
   import { highlightCode, renderMarkdown } from '../lib/markdown.js';
   import { prettyModel } from '../lib/format.js';
-  import { agentLabel, canSubmitMessage, composerPlaceholder, sessionHostLabel, sessionPathParts, sessionStatusView } from '../lib/sessionView.mjs';
+  import { agentLabel, canSubmitMessage, composerPlaceholder, composerSubmitState, sessionHostLabel, sessionPathParts, sessionStatusView } from '../lib/sessionView.mjs';
   import Sheet from './Sheet.svelte';
 
   let { session, onclose, onchanged } = $props();
@@ -22,6 +23,8 @@
   let labelDraft = $state('');
   let scrollEl = $state(null);
   let composerEl = $state(null);
+  let fileEl = $state(null);
+  let atts = $state([]);                 // { name, pct, done, error, message } — same shape as desktop Chat
   let ws = null;
 
   let statusKey = $derived(cs.status || session?.status || '');
@@ -30,20 +33,47 @@
   let statusView = $derived(sessionStatusView(statusKey));
   let perms = $derived(openPermissions(cs));
   let perm = $derived(perms[0] || null);
-  let canSend = $derived(!!draft.trim() && canSubmitMessage({ status: statusKey, ended }));
+  let canSend = $derived(composerSubmitState({ status: statusKey, ended, draft, attachments: atts }).canSend);
   let resumable = $derived((statusKey === 'exited' || statusKey === 'error' || statusKey === 'dormant') && !!session?.sessionId);
 
   const scrollDown = () => { if (scrollEl) queueMicrotask(() => { scrollEl.scrollTop = scrollEl.scrollHeight; }); };
   const hlDiff = (t) => highlightCode(t, 'diff');
 
   function send() {
-    const t = draft.trim();
-    if (!t || !canSubmitMessage({ status: statusKey, ended })) return;
+    if (!canSend || !canSubmitMessage({ status: statusKey, ended })) return;
     if (!ws || ws.readyState !== 1) return;
-    ws.send(JSON.stringify({ type: 'input', text: t }));
-    draft = '';
+    const t = draft.trim();
+    const refs = atts.filter((a) => a.done).map((a) => 'Attached file: ./' + a.name).join('\n');
+    const text = refs ? refs + (t ? '\n\n' + t : '') : t;
+    if (!text) return;
+    ws.send(JSON.stringify({ type: 'input', text }));
+    draft = ''; atts = [];
     if (composerEl) composerEl.style.height = 'auto';
   }
+
+  // Camera/photo attachments: upload into the session cwd (same PUT /api/upload as desktop paste),
+  // then reference by relative path on send so the agent can Read the file where it runs.
+  async function addFiles(fileList) {
+    for (const f of [...fileList]) {
+      let name = f.name || 'photo.jpg';
+      if (!f.name || atts.some((a) => a.name === name)) {     // uniquify nameless captures / collisions
+        const dot = name.lastIndexOf('.'), ext = dot > 0 ? name.slice(dot) : '', stem = dot > 0 ? name.slice(0, dot) : name;
+        name = stem + '-' + Date.now().toString(36).slice(-4) + ext;
+      }
+      atts.push({ name, pct: 0, done: false, error: false, message: '' });
+      const rec = atts[atts.length - 1];   // the $state proxy — mutating the raw object is invisible to the UI
+      try {
+        const r = await uploadFile(session.host, session.cwd, f, (p) => (rec.pct = p), name);
+        if (r && r.ok) rec.done = true; else { rec.error = true; rec.message = uploadMessage(r); }
+      } catch (e) { rec.error = true; rec.message = uploadMessage(e); }
+    }
+  }
+  function onPick(e) {
+    const fs = e.target.files;
+    if (fs && fs.length) addFiles(fs);
+    e.target.value = '';                   // re-picking the same photo must fire change again
+  }
+  const removeAtt = (rec) => { atts = atts.filter((a) => a !== rec); };
   function stop() { if (ws && ws.readyState === 1) { ws.send(JSON.stringify({ type: 'interrupt' })); cs.stopped = true; } }
   function primary() { if (statusKey === 'busy') stop(); else send(); }
   function respondPerm(item, decision) {
@@ -199,7 +229,20 @@
     {#if resumable}
       <button class="resume" onclick={revive}>Resume this session</button>
     {:else}
+      {#if atts.length}
+        <div class="atts">
+          {#each atts as a (a)}
+            <button class="att" class:err={a.error} onclick={() => removeAtt(a)}
+                    aria-label={'Remove attachment ' + a.name} title={a.message || a.name}>
+              <span class="an">{a.name}</span>
+              <span class="ax">{a.error ? 'failed' : !a.done ? Math.round(a.pct * 100) + '%' : '×'}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
       <div class="field">
+        <input class="filein" bind:this={fileEl} type="file" accept="image/*" multiple onchange={onPick} />
+        <button class="attach" disabled={ended} onclick={() => fileEl?.click()} aria-label="Attach a photo">+</button>
         <textarea bind:this={composerEl} bind:value={draft} oninput={grow} rows="1" disabled={ended}
                   placeholder={composerPlaceholder({ status: statusKey, ended, project: parts.project, agent: session.agent })}></textarea>
         <button class="go" class:ready={canSend} class:busy={statusKey === 'busy'}
@@ -320,7 +363,17 @@
   .pdeny:active { color: var(--alert); }
 
   .composer { flex: none; padding: var(--s2) var(--s3) calc(var(--s2) + env(safe-area-inset-bottom, 0px)); background: var(--bg); }
-  .field { position: relative; background: var(--surface-2); padding: 12px 56px 12px 14px; }
+  .atts { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 2px 8px; }
+  .att { display: inline-flex; align-items: center; gap: 9px; max-width: 100%; background: var(--chip); border: 0; border-radius: var(--pill); padding: 8px 14px; color: var(--text-dim); font: 11px var(--mono); cursor: pointer; }
+  .att .an { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .att .ax { flex: none; color: var(--text-faint); }
+  .att.err { color: var(--text); background: var(--chip-hi); }
+  .att.err .ax { color: var(--text); }
+  .field { position: relative; background: var(--surface-2); padding: 12px 56px 12px 50px; }
+  .filein { display: none; }
+  .attach { position: absolute; left: 6px; bottom: 6px; width: 40px; height: 40px; display: grid; place-items: center; border: 0; border-radius: var(--pill); background: none; color: var(--text-faint); font-size: 24px; font-weight: var(--w-light); line-height: 1; cursor: pointer; }
+  .attach:active { color: var(--text); }
+  .attach:disabled { opacity: .4; pointer-events: none; }
   .field:focus-within { box-shadow: inset 0 0 0 1px var(--text-dim); }
   textarea { display: block; width: 100%; resize: none; border: 0; outline: 0; background: none; color: var(--text); font: var(--w-reg) 16px/1.45 var(--sans); max-height: 132px; }
   textarea::placeholder { color: var(--text-faint); }

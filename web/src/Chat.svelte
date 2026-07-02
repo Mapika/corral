@@ -97,8 +97,8 @@
         const dot = name.lastIndexOf('.'), ext = dot > 0 ? name.slice(dot) : '', stem = dot > 0 ? name.slice(0, dot) : name;
         name = stem + '-' + Date.now().toString(36).slice(-4) + ext;
       }
-      const rec = { name, pct: 0, done: false, error: false, message: '' };
-      atts.push(rec);
+      atts.push({ name, pct: 0, done: false, error: false, message: '' });
+      const rec = atts[atts.length - 1];   // the $state proxy — mutating the raw object is invisible to the UI
       try {
         const r = await uploadFile(session.host, session.cwd, f, (p) => (rec.pct = p), name);
         if (r && r.ok) rec.done = true; else { rec.error = true; rec.message = uploadMessage(r); toast('Upload failed: ' + name); }
