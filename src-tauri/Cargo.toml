@@ -1,6 +1,6 @@
 [package]
 name = "corral"
-version = "0.2.0"
+version = "0.3.0"
 description = "Ranch your AI coding agents"
 authors = ["Mark Marosi"]
 license = "MIT"
