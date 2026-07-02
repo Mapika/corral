@@ -6,9 +6,9 @@
   let { sessions = [], onInspectChat, onNewChat } = $props();
 
   const LIVE = new Set(['busy', 'starting', 'idle']);
-  const rank = (s) => (s.status === 'busy' ? 0 : s.status === 'starting' ? 1 : 2);
+  // Stable order (oldest launch first): tiles must never jump around while agents stream.
   let active = $derived([...sessions.filter((s) => LIVE.has(s.status))]
-    .sort((a, b) => rank(a) - rank(b) || (b.updatedAt || 0) - (a.updatedAt || 0)));
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0) || String(a.id).localeCompare(String(b.id))));
   let hostCount = $derived(new Set(active.map((s) => s.host || 'local')).size);
 </script>
 
@@ -37,12 +37,13 @@
 </section>
 
 <style>
-  .fleet { position: absolute; inset: 0; overflow: auto; overflow-x: hidden; background: var(--bg); padding: var(--s5); }
-  .wrap { max-width: 1240px; margin: 0 auto; }
-  .head { min-height: 40px; display: flex; align-items: center; gap: var(--s3); padding: 0 2px 10px; }
+  .fleet { position: absolute; inset: 0; overflow: auto; overflow-x: hidden; display: flex; flex-direction: column; background: var(--bg); padding: var(--s4) var(--s5) var(--s5); }
+  .wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; width: 100%; max-width: 1400px; margin: 0 auto; }
+  .head { flex: none; min-height: 40px; display: flex; align-items: center; gap: var(--s3); padding: 0 2px 10px; }
   .sectionlabel { color: var(--text-faint); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; }
   .count { color: var(--text-faint); font: 11px var(--mono); }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 2px; }
+  /* tiles fill the viewport: one row stretches to full height, more rows share it (min 340px each) */
+  .grid { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(370px, 1fr)); grid-auto-rows: minmax(340px, 1fr); gap: 2px; }
   .empty { display: grid; justify-items: start; gap: 10px; padding: var(--s5) 2px; }
   .empty b { color: var(--text); font: var(--w-light) 26px/1.1 var(--sans); }
   .empty small { color: var(--text-faint); font: 12px/1.5 var(--mono); }

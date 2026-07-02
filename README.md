@@ -4,7 +4,7 @@
 run Claude, Codex, and OpenCode sessions on any of them, watch the whole fleet work live in one
 dark console, and get buzzed on your phone when an agent needs a decision.
 
-<!-- hero demo: docs/media/fleet.gif — record the fleet grid with 4+ agents streaming -->
+![The fleet view: three agents streaming live in one console](docs/media/fleet.gif)
 
 - **Fleet view** — every running agent as a live streaming tile, across all your machines at once.
 - **One window for the whole ranch** — chats, file browser, git diffs, terminals, SSH tunnels.
@@ -79,4 +79,4 @@ data dir keep working.)
 
 ## License
 
-MIT
+[MIT](LICENSE) © Mark Marosi ([@Mapika](https://github.com/Mapika))

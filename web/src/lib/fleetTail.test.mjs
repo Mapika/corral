@@ -1,19 +1,19 @@
 import assert from 'node:assert/strict';
-import { applyTailEvent, createTailState, TAIL_CAP } from './fleetTail.mjs';
+import { applyTailEvent, createTailState, TAIL_CAP, TEXT_CAP } from './fleetTail.mjs';
 
-function streamsTextDeltasAsALiveLastLine() {
+function streamsTextDeltasIntoOneGrowingBlock() {
   const st = createTailState();
   applyTailEvent(st, { type: '_user', text: 'fix the login bug' });
   applyTailEvent(st, { type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'text' } } });
-  applyTailEvent(st, { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Looking at auth.js\nThe bug is in ' } } });
-  applyTailEvent(st, { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'validateToken' } } });
+  applyTailEvent(st, { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Looking at **auth.js**\nThe bug is in ' } } });
+  applyTailEvent(st, { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '`validateToken`' } } });
 
+  assert.equal(st.lines.length, 2);                       // one user marker + ONE text block
   assert.equal(st.lines[0].text, '> fix the login bug');
-  assert.equal(st.lines[1].text, 'The bug is in validateToken');   // live line tracks the last line
+  assert.equal(st.lines[1].text, 'Looking at **auth.js**\nThe bug is in `validateToken`');
 
   applyTailEvent(st, { type: 'stream_event', event: { type: 'content_block_stop', index: 0 } });
-  // finished multi-line block expands to its tail lines
-  assert.deepEqual(st.lines.slice(1).map((l) => l.text), ['Looking at auth.js', 'The bug is in validateToken']);
+  assert.equal(st.lines.length, 2);                       // stop keeps the block, adds nothing
 }
 
 function showsToolUseWithSummary() {
@@ -25,17 +25,40 @@ function showsToolUseWithSummary() {
   assert.equal(st.lines[0].kind, 'tool');
 }
 
-function replaysCompleteAssistantEventsOnlyWhenNotStreamed() {
+function cumulativeAssistantEventsReplaceNotAppend() {
   const st = createTailState();
-  applyTailEvent(st, { type: 'assistant', message: { content: [{ type: 'text', text: 'a\nb\nc\nd' }, { type: 'tool_use', name: 'Read', input: { file_path: '/x.js' } }] } });
-  assert.deepEqual(st.lines.map((l) => l.text), ['b', 'c', 'd', 'Read  /x.js']);   // last 3 lines + tool
+  // the CLI re-emits the same message id as content grows
+  applyTailEvent(st, { type: 'assistant', message: { id: 'm1', content: [{ type: 'text', text: 'Plan:' }] } });
+  applyTailEvent(st, { type: 'assistant', message: { id: 'm1', content: [{ type: 'text', text: 'Plan:\n- step one' }] } });
+  applyTailEvent(st, { type: 'assistant', message: { id: 'm1', content: [{ type: 'text', text: 'Plan:\n- step one\n- step two' }, { type: 'tool_use', name: 'Write', input: { file_path: 'x.md' } }] } });
 
-  const streamed = createTailState();
-  applyTailEvent(streamed, { type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'text' } } });
-  applyTailEvent(streamed, { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'hi' } } });
-  const before = streamed.lines.length;
-  assert.equal(applyTailEvent(streamed, { type: 'assistant', message: { content: [{ type: 'text', text: 'hi' }] } }), false);
-  assert.equal(streamed.lines.length, before);   // no double-append after deltas drew it
+  assert.deepEqual(st.lines.map((l) => [l.kind, l.text]), [
+    ['text', 'Plan:\n- step one\n- step two'],
+    ['tool', 'Write  x.md'],
+  ]);
+
+  // a NEW message id appends after the previous one
+  applyTailEvent(st, { type: 'assistant', message: { id: 'm2', content: [{ type: 'text', text: 'Done.' }] } });
+  assert.equal(st.lines.length, 3);
+  assert.equal(st.lines[2].text, 'Done.');
+}
+
+function assistantEventsAreSkippedWhenDeltasAlreadyDrew() {
+  const st = createTailState();
+  applyTailEvent(st, { type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'text' } } });
+  applyTailEvent(st, { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'hi' } } });
+  const before = st.lines.length;
+  assert.equal(applyTailEvent(st, { type: 'assistant', message: { id: 'm1', content: [{ type: 'text', text: 'hi' }] } }), false);
+  assert.equal(st.lines.length, before);
+}
+
+function longTextKeepsItsFreshTail() {
+  const st = createTailState();
+  const long = Array.from({ length: 200 }, (_, i) => 'line number ' + i).join('\n');
+  applyTailEvent(st, { type: 'assistant', message: { id: 'm1', content: [{ type: 'text', text: long }] } });
+  assert.ok(st.lines[0].text.length <= TEXT_CAP + 1);
+  assert.ok(st.lines[0].text.startsWith('…'));
+  assert.ok(st.lines[0].text.endsWith('line number 199'));
 }
 
 function marksResultsPermissionsAndEndings() {
@@ -48,7 +71,8 @@ function marksResultsPermissionsAndEndings() {
     ['pill', 'turn complete · $0.12'],
     ['err', 'session ended (code 0)'],
   ]);
-  assert.equal(st.streamed, false);   // result resets the stream flag so replayed assistants render
+  assert.equal(st.streamed, false);
+  assert.equal(st.msgKey, null);   // result resets message tracking for the next turn
 }
 
 function capsTheTail() {
@@ -58,9 +82,11 @@ function capsTheTail() {
   assert.equal(st.lines[TAIL_CAP - 1].text, '> msg ' + (TAIL_CAP + 8));
 }
 
-streamsTextDeltasAsALiveLastLine();
+streamsTextDeltasIntoOneGrowingBlock();
 showsToolUseWithSummary();
-replaysCompleteAssistantEventsOnlyWhenNotStreamed();
+cumulativeAssistantEventsReplaceNotAppend();
+assistantEventsAreSkippedWhenDeltasAlreadyDrew();
+longTextKeepsItsFreshTail();
 marksResultsPermissionsAndEndings();
 capsTheTail();
 
