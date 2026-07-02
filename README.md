@@ -10,8 +10,9 @@ dark console, and get buzzed on your phone when an agent needs a decision.
 - **One window for the whole ranch** — chats, file browser, git diffs, terminals, SSH tunnels.
 - **Your ssh config is the setup** — if `ssh myhost` works, `corral` can ranch agents there. No
   daemons to install on remotes.
-- **Phone push** — "Claude needs you" lands on your phone via [ntfy](https://ntfy.sh) (or your
-  self-hosted relay) while you're away from the desk.
+- **Phone push** — "Claude needs you" lands on your phone while you're away from the desk:
+  Web Push straight from your Corral (no relay, end-to-end encrypted), or an
+  [ntfy](https://ntfy.sh)-compatible relay if you prefer.
 - **A real phone app** — pair the Android app (or your phone's browser) with a QR code and run
   the ranch from the couch: answer permission prompts with one tap, watch the fleet stream live,
   launch new agents.
@@ -80,13 +81,19 @@ dialog's Transport settings at the PEM pair to serve HTTPS instead. Details in
 
 ## Phone notifications
 
-Click the bell in the titlebar: pick a topic, install the ntfy app, subscribe. Corral pushes
-"needs a decision", "turn complete", and "died unexpectedly" — with a cooldown, and never for
-sessions you ended yourself. Works with ntfy.sh or any self-hosted ntfy; headless runs can set
-`CORRAL_NTFY_TOPIC` / `CORRAL_NTFY_SERVER` instead. Tapping a notification opens the session in
-the phone browser; if you use the Android app, flip **Tap opens → the Corral app** and taps
-deep-link (`corral://`) into the installed APK instead. The app checks for newer releases from
-its settings sheet.
+Corral pushes "needs a decision", "turn complete", and "died unexpectedly" — with a cooldown,
+and never for sessions you ended yourself. Two transports, same moments:
+
+- **Web Push (no extra app).** On a phone paired over HTTPS, open the console's settings sheet
+  and tap **Enable push on this phone**. Your Corral pushes straight to the browser's push
+  service — end-to-end encrypted (RFC 8291), no relay, no topic to guard — and a tap lands on
+  the session. This rides the one push connection your phone already keeps, so it costs no
+  extra battery.
+- **ntfy relay.** Click the bell in the titlebar: pick a topic, install the ntfy app, subscribe.
+  Works with ntfy.sh or any self-hosted ntfy; headless runs can set `CORRAL_NTFY_TOPIC` /
+  `CORRAL_NTFY_SERVER`. Permission asks can carry one-tap Allow/Deny buttons; taps open the
+  phone browser, or deep-link (`corral://`) into the Android app with **Tap opens → the Corral
+  app**. The app checks for newer releases from its settings sheet.
 
 ## Security model (short version)
 

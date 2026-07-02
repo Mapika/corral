@@ -11,6 +11,7 @@ const crypto = require('crypto');
 const chat = require('./chat');
 const tunnels = require('./tunnels');
 const pushCfg = require('./push');
+const webpush = require('./webpush');
 const remoteCfg = require('./remote');
 const demo = process.env.CORRAL_DEMO === '1' ? require('./demo') : null;
 
@@ -811,6 +812,30 @@ if (SELFTEST) {
     a.equal(ax.click, 'corral://session/ses%201');   // appClick opens the APK; actions still target the LAN listener
     a.ok(ax.actions.includes('http://10.0.0.2:7879/api/chat/permission'));
   }
+  // Web Push crypto against RFC 8291 Appendix A — same inputs must produce the RFC's exact
+  // message (salt+keys injected only here; production uses fresh randomness per send).
+  {
+    const cryptoNode = require('crypto');
+    const msg = webpush.encrypt(
+      Buffer.from('When I grow up, I want to be a watermelon'),
+      { p256dh: 'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4', auth: 'BTBZMqHH6r4Tts7J_aSIgg' },
+      { asPrivate: 'yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw', salt: 'DGv6ra1nlYgDCS1FRnbzlw' });
+    a.equal(msg.subarray(0, 86).toString('base64url'), 'DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8');
+    a.equal(msg.subarray(86).toString('base64url'), '8pfeW0KbunFT06SuDKoJH9Ql87S1QUrdirN6GcG7sFz1y1sqLgVi1VhjVkHsUoEsbI_0LpXMuGvnzQ');
+    // VAPID header: ES256 JWT over the endpoint origin, verifiable with the public half
+    const asPub = Buffer.from('BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8', 'base64url');
+    const jwk = { kty: 'EC', crv: 'P-256', d: 'yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw', x: asPub.subarray(1, 33).toString('base64url'), y: asPub.subarray(33).toString('base64url') };
+    const header = webpush.vapidAuth('https://push.example.net/w/abc', jwk, 1700000000);
+    const jwt = header.match(/^vapid t=([^,]+), k=(.+)$/);
+    a.equal(jwt[2], asPub.toString('base64url'));
+    const [h, p, sig] = jwt[1].split('.');
+    a.deepEqual(JSON.parse(Buffer.from(h, 'base64url')), { typ: 'JWT', alg: 'ES256' });
+    const claims = JSON.parse(Buffer.from(p, 'base64url'));
+    a.equal(claims.aud, 'https://push.example.net');
+    a.equal(claims.exp, 1700000000 + 12 * 3600);
+    const pub = cryptoNode.createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y }, format: 'jwk' });
+    a.ok(cryptoNode.verify('sha256', Buffer.from(h + '.' + p), { key: pub, dsaEncoding: 'ieee-p1363' }, Buffer.from(sig, 'base64url')));
+  }
   console.log('selftest ok'); process.exit(0);
   })().catch(e => { console.error(e); process.exit(1); });
 }
@@ -1128,6 +1153,35 @@ const handleRequest = async (req, res) => {
     res.setHeader('content-type', 'application/json');
     try {
       await pushCfg.send({ title: 'Corral test', body: 'Push notifications are wired up.', tags: 'bell', priority: 'default' });
+      return res.end(JSON.stringify({ ok: true }));
+    } catch (e) {
+      res.statusCode = 502; return res.end(JSON.stringify({ ok: false, error: String(e.message || e) }));
+    }
+  }
+  // --- Web Push (no relay): the phone subscribes via the service worker and we push straight
+  // to the browser vendor's endpoint (webpush.js). Params ride the query string like every
+  // other mutation here.
+  if (url.pathname === '/api/webpush' && req.method === 'GET') {
+    res.setHeader('content-type', 'application/json');
+    return res.end(JSON.stringify(webpush.status()));
+  }
+  if (url.pathname === '/api/webpush/subscribe' && req.method === 'POST') {
+    res.setHeader('content-type', 'application/json');
+    try {
+      const q = url.searchParams;
+      return res.end(JSON.stringify({ ok: true, ...webpush.subscribe({ endpoint: q.get('endpoint'), p256dh: q.get('p256dh'), auth: q.get('auth') }) }));
+    } catch (e) {
+      res.statusCode = 400; return res.end(JSON.stringify({ ok: false, error: String(e.message || e) }));
+    }
+  }
+  if (url.pathname === '/api/webpush/unsubscribe' && req.method === 'POST') {
+    res.setHeader('content-type', 'application/json');
+    return res.end(JSON.stringify({ ok: true, ...webpush.unsubscribe(url.searchParams.get('endpoint')) }));
+  }
+  if (url.pathname === '/api/webpush/test' && req.method === 'POST') {
+    res.setHeader('content-type', 'application/json');
+    try {
+      await webpush.notify({ title: 'Corral test', body: 'Web Push is wired up.' });
       return res.end(JSON.stringify({ ok: true }));
     } catch (e) {
       res.statusCode = 502; return res.end(JSON.stringify({ ok: false, error: String(e.message || e) }));

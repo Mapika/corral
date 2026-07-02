@@ -7,6 +7,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const remote = require('./remote');
+const webpush = require('./webpush');
 
 // Same fallback rule as chat.js: an existing pre-rename ~/.codapp keeps being used.
 const DATA_DIR = fs.existsSync(path.join(os.homedir(), '.codapp')) && !fs.existsSync(path.join(os.homedir(), '.corral'))
@@ -149,20 +150,26 @@ async function send({ title, body, tags, priority, click, actions }, cfg = get()
 }
 
 // Session hook: fire-and-forget with a per-session+kind cooldown so a burst (e.g. several
-// permission requests in one turn) lands as one buzz, not five.
+// permission requests in one turn) lands as one buzz, not five. Two transports share the event
+// toggles and the cooldown: the ntfy relay (when enabled) and Web Push straight to any phone
+// that subscribed through the service worker (see webpush.js — no relay involved).
 const lastSent = new Map();
 const COOLDOWN_MS = 15000;
 function notifySession(kind, s, extra = {}) {
   const cfg = get();
   const evKey = kind.startsWith('fail') ? 'fail' : kind;
-  if (!cfg.enabled || !cfg.topic || cfg.events[evKey] === false) return;
+  if (cfg.events[evKey] === false) return;
   const key = (s && s.id) + ':' + evKey;
   const now = Date.now();
   if (now - (lastSent.get(key) || 0) < COOLDOWN_MS) return;
   lastSent.set(key, now);
-  const { base, token } = remoteBase();
-  const extras = notificationExtras({ kind, sessionId: s && s.id, requestId: extra.requestId, base, token, actionsEnabled: cfg.actions, appClick: cfg.appClick });
-  send({ ...messageFor(kind, s, extra), ...extras }, cfg).catch((e) => console.error('push failed:', e.message));
+  const msg = messageFor(kind, s, extra);
+  if (cfg.enabled && cfg.topic) {
+    const { base, token } = remoteBase();
+    const extras = notificationExtras({ kind, sessionId: s && s.id, requestId: extra.requestId, base, token, actionsEnabled: cfg.actions, appClick: cfg.appClick });
+    send({ ...msg, ...extras }, cfg).catch((e) => console.error('push failed:', e.message));
+  }
+  webpush.notify({ title: msg.title, body: msg.body, priority: msg.priority, sessionId: s && s.id }).catch((e) => console.error('webpush failed:', e.message));
 }
 
 module.exports = { get, set, send, messageFor, notificationExtras, notifySession };

@@ -1,7 +1,8 @@
 <script>
   // The phone console: HERD (decide) · RANCH (launch) · FLEET (watch), with chat as a full-screen
   // push. Built for thumbs on the Ink system — flush surfaces, seams, one warm signal.
-  import { getServer, resumeSession } from '../lib/api.js';
+  import { getServer, getWebPush, resumeSession, testWebPush, webPushSubscribe, webPushUnsubscribe } from '../lib/api.js';
+  import { applicationServerKeyBytes, subscriptionParams } from '../lib/webPushClient.mjs';
   import { releaseUpdate, sessionFromDeepLink } from '../lib/appUpdate.mjs';
   import { SERVER_KEY, TOKEN_KEY } from '../lib/serverBase.mjs';
   import { isResumableSession } from '../lib/operatorStatus.mjs';
@@ -32,6 +33,9 @@
   const VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev';
   let update = $state(null);         // null | {checking} | {latest,url,newer} | {error}
 
+  // Web Push enrolment (browser pages only — the APK webview has no push, it uses ntfy/corral://).
+  let notif = $state({ supported: false, subscribed: false, busy: false, denied: false, error: '', note: '' });
+
   const data = createMobileData();
 
   let liveCount = $derived(data.d.sessions.filter((s) => s.status === 'busy' || s.status === 'starting').length);
@@ -52,6 +56,15 @@
     openSession(s);
   });
 
+  // A push notification tapped while the console is already open: the service worker focuses
+  // this window and posts the target session instead of navigating.
+  $effect(() => {
+    if (standalone || typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+    const onMsg = (e) => { if (e.data && e.data.type === 'open-session' && e.data.session) deepLink = e.data.session; };
+    navigator.serviceWorker.addEventListener('message', onMsg);
+    return () => navigator.serviceWorker.removeEventListener('message', onMsg);
+  });
+
   // corral://session/<id> — the APK's notification deep link. A cold start arrives via
   // getCurrent, a running app via onOpenUrl; both funnel into the same roster-resolved deepLink.
   $effect(() => {
@@ -68,6 +81,51 @@
     })();
     return () => { gone = true; try { unlisten && unlisten(); } catch (e) {} };
   });
+
+  // Probe push state when the sheet opens: supported means a live SW registration (secure
+  // origin + production build) and the Push/Notification APIs present.
+  $effect(() => {
+    if (!settingsOpen || standalone) return;
+    (async () => {
+      try {
+        const apis = typeof navigator !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+        const reg = apis ? await navigator.serviceWorker.getRegistration() : null;
+        const sub = reg ? await reg.pushManager.getSubscription() : null;
+        notif = { ...notif, supported: !!reg, subscribed: !!sub, denied: apis && Notification.permission === 'denied' };
+      } catch (e) {}
+    })();
+  });
+
+  async function toggleNotif() {
+    notif.busy = true; notif.error = ''; notif.note = '';
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (!reg) throw new Error('no service worker');
+      const existing = await reg.pushManager.getSubscription();
+      if (existing) {
+        try { await webPushUnsubscribe(existing.endpoint); } catch (e) {}
+        await existing.unsubscribe();
+        notif.subscribed = false;
+      } else {
+        const perm = await Notification.requestPermission();
+        notif.denied = perm === 'denied';
+        if (perm !== 'granted') throw new Error('notifications not allowed');
+        const { publicKey } = await getWebPush();
+        const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: applicationServerKeyBytes(publicKey) });
+        const params = subscriptionParams(sub.toJSON());
+        if (!params) { await sub.unsubscribe(); throw new Error('bad subscription'); }
+        await webPushSubscribe(params);
+        notif.subscribed = true;
+      }
+    } catch (e) { notif.error = e?.message || 'push setup failed'; }
+    notif.busy = false;
+  }
+
+  async function sendTestPush() {
+    notif.note = ''; notif.error = '';
+    try { await testWebPush(); notif.note = 'sent — should land in a moment'; }
+    catch (e) { notif.error = e?.message || 'test failed'; }
+  }
 
   async function checkUpdate() {
     update = { checking: true };
@@ -189,6 +247,23 @@
           <p class="kv"><span>Server</span><code>{getServer() || 'this device'}</code></p>
           <p class="kv"><span>Stream</span><code>{data.d.live ? 'live' : data.d.offline ? 'offline' : 'polling'}</code></p>
           {#if data.d.error}<p class="errline">{data.d.error}</p>{/if}
+          {#if !standalone}
+            <h2 class="apph">Notifications</h2>
+            {#if !notif.supported}
+              <p class="hint">Push needs a secure origin — pair over HTTPS (Transport in the pairing dialog) to get buzzed without the ntfy app.</p>
+            {:else if notif.denied && !notif.subscribed}
+              <p class="hint">Notifications are blocked for this site — allow them in the browser's site settings, then try again.</p>
+            {:else}
+              <button class="unpair checkupd" onclick={toggleNotif} disabled={notif.busy}>
+                {notif.busy ? 'working…' : notif.subscribed ? 'Disable push on this phone' : 'Enable push on this phone'}
+              </button>
+              {#if notif.subscribed}
+                <button class="testpush" onclick={sendTestPush}>Send a test</button>
+              {/if}
+            {/if}
+            {#if notif.error}<p class="errline">{notif.error}</p>{/if}
+            {#if notif.note}<p class="hint">{notif.note}</p>{/if}
+          {/if}
           {#if standalone}
             <button class="unpair" onclick={unpair}>Unpair from this server</button>
             <h2 class="apph">App</h2>
@@ -245,6 +320,7 @@
   .checkupd { margin-top: var(--s3); }
   .checkupd:disabled { opacity: .6; }
   .getupd { margin-top: var(--s3); width: 100%; min-height: 48px; background: var(--paper); color: var(--ink); border: 0; border-radius: var(--pill); font: var(--w-med) 14px var(--sans); cursor: pointer; }
+  .testpush { margin-top: var(--s2); width: 100%; min-height: 44px; background: none; border: 0; color: var(--text-dim); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; cursor: pointer; }
   .hint { margin-top: var(--s3); color: var(--text-faint); font-size: 11.5px; line-height: 1.5; }
 
   @media (prefers-reduced-motion: reduce) { .ldot { animation: none; } }

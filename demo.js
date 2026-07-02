@@ -278,6 +278,9 @@ async function handleApi(req, res, url) {
   if (url.pathname === '/api/history/search') return json(res, { hits: [] }), true;
   if (url.pathname === '/api/push') return json(res, { enabled: false, server: 'https://ntfy.sh', topic: '', events: { input: true, done: true, fail: true } }), true;
   if (url.pathname === '/api/push/test' && req.method === 'POST') return json(res, { ok: true }), true;
+  // Web Push stubs — demo must never mint real VAPID keys in the user's data dir.
+  if (url.pathname === '/api/webpush') return json(res, { publicKey: 'BDemoDemoDemo', count: 0 }), true;
+  if (url.pathname.startsWith('/api/webpush/') && req.method === 'POST') return json(res, { ok: true, publicKey: 'BDemoDemoDemo', count: 1 }), true;
   if (url.pathname === '/api/tunnels') {
     if (req.method === 'GET') return json(res, demoTunnels), true;
     if (req.method === 'POST') {

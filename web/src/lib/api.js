@@ -161,6 +161,16 @@ export async function setPushConfig({ enabled, actions, appClick, server, topic,
 }
 export async function testPush() { return json('/api/push/test', { method: 'POST', retries: 0 }); }
 
+// --- Web Push (relay-free — the phone subscribes through the service worker) ---
+export async function getWebPush() { return json('/api/webpush'); }
+export async function webPushSubscribe({ endpoint, p256dh, auth } = {}) {
+  return json('/api/webpush/subscribe?' + new URLSearchParams({ endpoint, p256dh, auth }), { method: 'POST', retries: 0 });
+}
+export async function webPushUnsubscribe(endpoint) {
+  return json('/api/webpush/unsubscribe?' + new URLSearchParams({ endpoint }), { method: 'POST', retries: 0 });
+}
+export async function testWebPush() { return json('/api/webpush/test', { method: 'POST', retries: 0 }); }
+
 // --- tunnels ---
 export async function listTunnels() { return json('/api/tunnels'); }
 export async function addTunnel(host, opts) {
