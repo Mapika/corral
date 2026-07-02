@@ -1,7 +1,7 @@
 name: release
 
 # Tag a version (git tag v0.1.0 && git push --tags) and this builds desktop bundles for
-# macOS (Apple silicon + Intel), Windows, and Linux, attached to a draft GitHub release.
+# macOS (Apple silicon), Windows, and Linux, attached to a draft GitHub release.
 # Builds are unsigned: macOS users right-click > Open past Gatekeeper the first time,
 # Windows users click through SmartScreen. Signing can be added later without restructuring.
 

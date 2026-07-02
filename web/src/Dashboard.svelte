@@ -204,7 +204,6 @@
   .todayhead { min-height: 48px; display: flex; align-items: center; gap: var(--s3); padding: 0 var(--s3); border-bottom: 1px solid var(--seam); }
   .todayhead > div { min-width: 0; display: grid; gap: 5px; }
   .sectionlabel, .phead { color: var(--text-faint); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; }
-  .todayhead p { margin: 0; color: var(--text-dim); font-size: 13px; line-height: 1.35; }
   .todayhead .mini { margin-left: auto; }
   .todaylist { display: grid; gap: 1px; background: var(--seam); }
   .todayitem { min-width: 0; min-height: 64px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; column-gap: var(--s3); background: var(--bg); }

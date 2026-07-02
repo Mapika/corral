@@ -10,6 +10,7 @@ const crypto = require('crypto');
 const chat = require('./chat');
 const tunnels = require('./tunnels');
 const pushCfg = require('./push');
+const demo = process.env.CORRAL_DEMO === '1' ? require('./demo') : null;
 
 const SELFTEST = process.argv[2] === 'selftest';
 const execFileAsync = promisify(execFile);
@@ -132,6 +133,10 @@ function listPathError(host, dir) {
 // Serve the built Svelte app from dist/ (run `npm run build`; the Tauri bundle builds it for you).
 // For frontend dev use `npm run dev` (Vite) instead of serving through this server.
 const WEBROOT = path.join(__dirname, 'dist');
+function insideDir(root, target) {
+  const rel = path.relative(root, target);
+  return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+}
 
 // CSP for the served HTML (applies when the Node server serves it — packaged app / `npm start`).
 // script-src is strict 'self' (Vite bundles every dep locally); the only off-origin asset is the
@@ -314,6 +319,10 @@ if (SELFTEST) {
   a.equal(t.length, 2); a.equal(t[0].attached, true); a.equal(t[0].path, '/home/m/proj'); a.equal(t[0].group, '');
   a.equal(t[1].attached, false); a.equal(t[1].group, 'work'); a.equal(t[1].path, '/tmp');
   a.equal(ctOf('a.PNG'), 'image/png'); a.equal(ctOf('x.py').startsWith('text/'), true); a.equal(ctOf('b.bin'), 'application/octet-stream');
+  const wr = path.join(os.tmpdir(), 'corral-dist');
+  a.equal(insideDir(wr, path.join(wr, 'index.html')), true);
+  a.equal(insideDir(wr, path.join(path.dirname(wr), path.basename(wr) + '-secret', 'x')), false);
+  a.equal(insideDir(wr, path.join(wr, '..', 'package.json')), false);
   const c = parseCc('{"sessionId":"x","status":"busy","cwd":"/a"}\nbroken\n{"status":"idle","cwd":"/b"}');
   a.equal(c.length, 2); a.equal(c[1].status, 'idle');
   // security primitives (Phase 0)
@@ -725,7 +734,7 @@ if (SELFTEST) {
 
 if (!SELFTEST) {
 
-chat.loadRoster();   // re-hydrate past sessions (dormant) so they can be seen and resumed
+if (!demo) chat.loadRoster();   // re-hydrate past sessions (dormant) so they can be seen and resumed
 
 // Single-user sidecar: a stray rejection or late stream error in one request must not take down
 // every other live session + tunnel. Log loudly, stay up.
@@ -747,6 +756,7 @@ const server = http.createServer(async (req, res) => {
     if (!originAllowed(origin)) { res.statusCode = 403; return res.end('bad origin'); }
     if (!tokenEq(reqToken(req, url))) { res.statusCode = 401; return res.end('unauthorized'); }
   }
+  if (demo && await demo.handleApi(req, res, url)) return;
   if (url.pathname === '/api/servers') {
     hosts = loadHosts(); // re-read config on each refresh, so new Host entries show up live
     const out = await inspectHostsWithBudget(hosts);
@@ -1020,7 +1030,7 @@ const server = http.createServer(async (req, res) => {
   }
   const rel = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
   const fp = path.join(WEBROOT, rel);
-  if (!fp.startsWith(WEBROOT)) { res.statusCode = 403; return res.end(); }
+  if (!insideDir(WEBROOT, fp)) { res.statusCode = 403; return res.end(); }
   const CT = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ico': 'image/x-icon', '.png': 'image/png', '.map': 'application/json' };
   fs.readFile(fp, (err, buf) => {
     if (err) {
@@ -1069,6 +1079,7 @@ const debouncedPush = (make, ms = 200) => {
 chat.onAnyChange(debouncedPush(() => ({ type: 'sessions', sessions: chat.list() })));
 tunnels.onChange(debouncedPush(() => ({ type: 'tunnels', tunnels: tunnels.list() })));
 eventsWss.on('connection', (ws) => {
+  if (demo) return demo.handleEvents(ws);
   let authed = !TOKEN;
   const doSub = () => {
     eventsClients.add(ws);
@@ -1091,6 +1102,7 @@ eventsWss.on('connection', (ws) => {
 // /chat: attach a websocket to a local Claude session (replays scrollback, then streams live).
 // Client sends {type:'input',text} to send a user message; {type:'auth',token} first if a token is set.
 chatWss.on('connection', (ws, req) => {
+  if (demo) return demo.handleChat(ws, req);
   const url = new URL(req.url, 'http://x');
   const id = url.searchParams.get('id');
   let authed = !TOKEN, attached = false;
@@ -1152,7 +1164,7 @@ wss.on('connection', (ws, req) => {
 
 const PORT = process.env.PORT || 7878;
 const BIND = process.env.CORRAL_BIND || process.env.CODAPP_BIND || '127.0.0.1';   // loopback only; never 0.0.0.0
-tunnels.restorePersisted();                             // reap orphaned ssh forwards, then bring last run's tunnels back up
+if (!demo) tunnels.restorePersisted();                   // reap orphaned ssh forwards, then bring last run's tunnels back up
 // Kill every child (agent sessions + ssh forwards) and flush the roster on the way out. The
 // 'exit' hook covers any path that actually brings the process down — including a fatal throw —
 // while the uncaughtException handler above deliberately keeps the sidecar alive.

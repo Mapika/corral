@@ -4,7 +4,7 @@
 run Claude, Codex, and OpenCode sessions on any of them, watch the whole fleet work live in one
 dark console, and get buzzed on your phone when an agent needs a decision.
 
-![The fleet view: three agents streaming live in one console](docs/media/fleet.gif)
+![Corral showing the dashboard, fleet view, and a live permission prompt](docs/media/corral-fleet-chat.gif)
 
 - **Fleet view** — every running agent as a live streaming tile, across all your machines at once.
 - **One window for the whole ranch** — chats, file browser, git diffs, terminals, SSH tunnels.
@@ -15,10 +15,20 @@ dark console, and get buzzed on your phone when an agent needs a decision.
 - **Operator calm** — a dashboard that answers "what's running, what's waiting on me, what broke"
   and stays quiet about everything else.
 
+## What it actually does
+
+Browse a session's working directory and inspect the diff without leaving the app.
+
+![File browser and git diff handoff](docs/media/corral-files-changes.gif)
+
+Forward a remote service to localhost, then copy or open it.
+
+![Remote port forwarding](docs/media/corral-tunnels.gif)
+
 ## Install
 
-Grab the installer for your OS from [Releases](../../releases) — `.dmg` (macOS, Apple silicon +
-Intel), `.exe` (Windows), `.AppImage`/`.deb` (Linux).
+Grab the installer for your OS from [Releases](../../releases) — `.dmg` (macOS, Apple silicon),
+`.exe` (Windows), `.AppImage`/`.deb` (Linux). Intel Mac users can build from source for now.
 
 > Builds are currently unsigned. macOS: right-click the app → **Open** the first time.
 > Windows: SmartScreen → **More info** → **Run anyway**.
