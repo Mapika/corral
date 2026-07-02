@@ -1,6 +1,5 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "//": "Android overlay (RFC 7396 merge over tauri.conf.json): the mobile app is a thin paired client — no Node sidecar binary, no backend resources. `null` deletes the base key; `[]` replaces the array.",
   "bundle": {
     "externalBin": [],
     "resources": null,
