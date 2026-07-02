@@ -2,7 +2,7 @@
   // Full-screen chat: the same wire protocol as the desktop view (lib/chatStream.mjs), reshaped
   // for a thumb — sticky composer, and permission prompts docked as a decision sheet above it.
   import { untrack } from 'svelte';
-  import { chatSocket, gitDiff, killSession, removeSession, resumeSession } from '../lib/api.js';
+  import { chatSocket, gitDiff, killSession, removeSession, resumeSession, setSessionLabel } from '../lib/api.js';
   import { createChatState, handleChatEvent, openPermissions } from '../lib/chatStream.mjs';
   import { highlightCode, renderMarkdown } from '../lib/markdown.js';
   import { prettyModel } from '../lib/format.js';
@@ -16,6 +16,10 @@
   let disconnected = $state(false);
   let menuOpen = $state(false);
   let changes = $state(null);            // null | { loading } | { isRepo, diff, untracked }
+  // svelte-ignore state_referenced_locally
+  let label = $state(session?.label || null);    // operator-assigned name (roster-persisted)
+  let renaming = $state(false);
+  let labelDraft = $state('');
   let scrollEl = $state(null);
   let composerEl = $state(null);
   let ws = null;
@@ -44,6 +48,7 @@
   function primary() { if (statusKey === 'busy') stop(); else send(); }
   function respondPerm(item, decision) {
     if (!item || item.resolved || !ws || ws.readyState !== 1) return;
+    try { navigator.vibrate?.(12); } catch (e) {}
     item.resolved = decision;              // optimistic; the server echoes _permission_resolved
     ws.send(JSON.stringify({ type: 'permission', requestId: item.id, decision }));
   }
@@ -53,6 +58,18 @@
     ta.style.height = Math.min(ta.scrollHeight, 132) + 'px';
   }
 
+  function startRename() {
+    labelDraft = label || parts.project;
+    renaming = true;
+  }
+  async function saveRename() {
+    if (!renaming) return;
+    renaming = false; menuOpen = false;
+    const next = labelDraft.trim().slice(0, 60);
+    const effective = next && next !== parts.project ? next : null;   // folder name = no label
+    if (effective === label) return;
+    try { await setSessionLabel(session.id, effective || ''); label = effective; onchanged?.(); } catch (e) {}
+  }
   async function revive() {
     menuOpen = false;
     try { await resumeSession(session.id); cs.status = 'starting'; onchanged?.(); } catch (e) {}
@@ -103,7 +120,7 @@
   <header>
     <button class="back" onclick={() => onclose?.()} aria-label="Back">&lsaquo;</button>
     <div class="who">
-      <b>{session.label || parts.project}</b>
+      <b>{label || parts.project}</b>
       <span>{sessionHostLabel(session.host)} · {agentLabel(session.agent)}{#if cs.model} · {prettyModel(cs.model)}{/if}</span>
     </div>
     <span class="stat {statusView.tone}" title={statusView.detail}><span class="lamp"></span>{statusView.label}</span>
@@ -195,8 +212,18 @@
   </div>
 
   {#if menuOpen}
-    <Sheet onclose={() => (menuOpen = false)} label="Session actions">
+    <Sheet onclose={() => { menuOpen = false; renaming = false; }} label="Session actions">
       <div class="menu">
+        {#if renaming}
+          <div class="renamerow">
+            <!-- svelte-ignore a11y_autofocus -->
+            <input bind:value={labelDraft} autofocus placeholder={parts.project} maxlength="60"
+                   onkeydown={(e) => { if (e.key === 'Enter') saveRename(); }} />
+            <button class="savebtn" onclick={saveRename}>Save</button>
+          </div>
+        {:else}
+          <button onclick={startRename}>Rename{#if label}&nbsp;<span class="curlabel">({label})</span>{/if}</button>
+        {/if}
         <button onclick={openChanges}>Review changes</button>
         {#if resumable}<button onclick={revive}>Resume</button>{/if}
         {#if !ended}<button onclick={end}>End session</button>{/if}
@@ -308,6 +335,11 @@
   .menu button { min-height: 54px; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--seam); color: var(--text); font: var(--w-reg) 15px var(--sans); cursor: pointer; padding: 0 4px; }
   .menu button:last-child { border-bottom: 0; }
   .menu .danger { color: var(--alert); }
+  .menu .curlabel { color: var(--text-faint); font-size: 13px; }
+  .renamerow { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--seam); }
+  .renamerow input { flex: 1; min-width: 0; background: var(--surface-2); border: 0; outline: 0; color: var(--text); font: 16px var(--sans); padding: 12px 13px; }
+  .renamerow input:focus { box-shadow: inset 0 0 0 1px var(--text-dim); }
+  .menu .savebtn { flex: none; min-height: 44px; border: 0; border-bottom: 0; background: var(--paper); color: var(--ink); border-radius: var(--pill); padding: 0 20px; font: var(--w-med) 13px var(--sans); }
 
   .diffview { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; background: var(--bg); }
   .diffbody { flex: 1; min-height: 0; overflow: auto; }

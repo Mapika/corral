@@ -3,6 +3,9 @@
   import { respondPermission, resumeSession, removeSession } from '../lib/api.js';
   import { lastActiveLabel } from '../lib/operatorStatus.mjs';
   import { agentLabel, sessionHostLabel, sessionPathParts, sessionStatusView } from '../lib/sessionView.mjs';
+  import Shader from '../lib/Shader.svelte';
+
+  const buzz = (ms = 12) => { try { navigator.vibrate?.(ms); } catch (e) {} };
 
   let { data, onOpenSession, onLaunch } = $props();
 
@@ -21,6 +24,7 @@
 
   async function respond(s, decision) {
     if (!s.pendingPerm || acting[s.id]) return;
+    buzz();
     acting[s.id] = true;
     try { await respondPermission(s.id, s.pendingPerm.id, decision); await data.poll(); }
     catch (e) { onOpenSession?.(s); }          // prompt already answered/changed — resolve it in the chat
@@ -44,6 +48,7 @@
 
 <div class="herd">
   <div class="band">
+    <div class="atmo" class:alive={runningCount > 0} aria-hidden="true"><Shader alive={runningCount > 0} /></div>
     <div class="stat">
       <b class:alive={runningCount > 0}>{runningCount}</b>
       <span>running</span>
@@ -59,11 +64,15 @@
   </div>
 
   {#if sessions.length === 0}
-    <div class="empty">
-      <b>The herd is quiet.</b>
-      <span>No sessions anywhere. Ranch one.</span>
-      <button class="ranch" onclick={() => onLaunch?.()}>Ranch an agent</button>
-    </div>
+    {#if data.d.loaded}
+      <div class="empty">
+        <b>The herd is quiet.</b>
+        <span>No sessions anywhere. Ranch one.</span>
+        <button class="ranch" onclick={() => onLaunch?.()}>Ranch an agent</button>
+      </div>
+    {:else}
+      <div class="empty"><span class="conn">connecting…</span></div>
+    {/if}
   {/if}
 
   {#if waiting.length || attention.length}
@@ -144,9 +153,11 @@
 <style>
   .herd { padding: 0 var(--s4) var(--s6); }
 
-  /* stat band — thin oversized numerals do the talking */
-  .band { display: flex; gap: var(--s5); padding: var(--s5) 0 var(--s5); border-bottom: 1px solid var(--seam); }
-  .stat { display: flex; flex-direction: column; gap: 6px; }
+  /* stat band — thin oversized numerals over the mercury atmosphere (flowing while agents run) */
+  .band { position: relative; display: flex; gap: var(--s5); padding: var(--s5) var(--s3); margin: 0 calc(-1 * var(--s4)); border-bottom: 1px solid var(--seam); overflow: hidden; }
+  .atmo { position: absolute; inset: 0; opacity: .3; transition: opacity 1.2s; pointer-events: none; }
+  .atmo.alive { opacity: .7; }
+  .stat { position: relative; display: flex; flex-direction: column; gap: 6px; }
   .stat b { font-size: 46px; line-height: .9; font-weight: var(--w-thin); color: var(--text-dim); font-variant-numeric: tabular-nums; }
   .stat b.alive { background: var(--mercury-flow); -webkit-background-clip: text; background-clip: text; color: transparent; }
   .stat b.warn { color: var(--text); }
@@ -155,6 +166,7 @@
   .empty { min-height: 46dvh; display: flex; flex-direction: column; justify-content: center; gap: 12px; }
   .empty b { font-size: clamp(34px, 9vw, 46px); line-height: 1.02; font-weight: var(--w-light); color: var(--text); }
   .empty span { color: var(--text-dim); font-size: 13px; }
+  .empty .conn { font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--text-faint); }
   .ranch { align-self: flex-start; margin-top: 14px; background: var(--paper); color: var(--ink); border: 0; border-radius: var(--pill); padding: 12px 22px; font: var(--w-med) 13px var(--sans); cursor: pointer; }
 
   section { padding-top: var(--s5); }

@@ -10,20 +10,34 @@
 
   let { onclose } = $props();
 
-  let cfg = $state(null);        // { enabled, port, running, error, addresses, token }
+  let cfg = $state(null);        // { enabled, port, tls, running, error, addresses, token, certPath, keyPath }
   let address = $state('');
   let qr = $state('');
   let error = $state('');
   let note = $state('');
   let busy = $state(false);
+  let tlsOpen = $state(false);
+  let certDraft = $state('');
+  let keyDraft = $state('');
 
-  let pairUrl = $derived(cfg?.enabled && cfg?.token && address ? buildPairUrl(address, cfg.port, cfg.token) : '');
+  let pairUrl = $derived(cfg?.enabled && cfg?.token && address ? buildPairUrl(address, cfg.port, cfg.token, { tls: !!cfg.tls }) : '');
 
   async function load() {
     try {
       cfg = await getRemoteConfig();
       if (!address || !(cfg.addresses || []).includes(address)) address = (cfg.addresses || [])[0] || '';
+      certDraft = cfg.certPath || ''; keyDraft = cfg.keyPath || '';
     } catch (e) { error = apiErrorMessage(e, 'Could not load remote settings.'); }
+  }
+  async function saveTls() {
+    busy = true; error = '';
+    try {
+      cfg = await setRemoteConfig({ certPath: certDraft.trim(), keyPath: keyDraft.trim() });
+      certDraft = cfg.certPath || ''; keyDraft = cfg.keyPath || '';
+      note = cfg.tls ? 'serving https — re-scan on every phone' : 'back to plain http';
+      setTimeout(() => (note = ''), 3200);
+    } catch (e) { error = apiErrorMessage(e, 'Could not update TLS settings.'); }
+    finally { busy = false; }
   }
   async function toggle(enabled) {
     busy = true; error = '';
@@ -112,6 +126,28 @@
           <div class="err">No private network address found on this machine.</div>
         {/if}
 
+        {#if cfg.enabled}
+          <div class="row tlsrow">
+            <span class="olabel">Transport</span>
+            <button class="ghost" onclick={() => (tlsOpen = !tlsOpen)}>{cfg.tls ? 'https (TLS)' : 'plain http'} — change</button>
+          </div>
+          {#if tlsOpen}
+            <div class="tlsbox">
+              <p class="hint">Point at a PEM pair the phone will trust — <code>tailscale cert</code> output
+                is the easy path on a tailnet. Clear both fields to go back to plain http.</p>
+              <div class="row">
+                <span class="olabel">Cert</span>
+                <input class="field" bind:value={certDraft} spellcheck="false" autocomplete="off" placeholder="C:\path\to\machine.crt" />
+              </div>
+              <div class="row">
+                <span class="olabel">Key</span>
+                <input class="field" bind:value={keyDraft} spellcheck="false" autocomplete="off" placeholder="C:\path\to\machine.key" />
+              </div>
+              <div class="row"><span class="olabel"></span><button class="ghost" onclick={saveTls} disabled={busy}>Apply</button></div>
+            </div>
+          {/if}
+        {/if}
+
         {#if error}<div class="err" role="alert">{error}</div>{/if}
         {#if note}<div class="note">{note}</div>{/if}
       </div>
@@ -156,6 +192,10 @@
 
   .err { color: var(--alert); font-size: 12px; }
   .note { color: var(--text-dim); font: 11.5px var(--mono); }
+  .field { flex: 1; min-width: 0; background: var(--chip); border: 0; color: var(--text); padding: 0 12px; height: 34px; font: 12px/1 var(--mono); }
+  .field:focus { outline: 0; background: var(--chip-hi); }
+  .tlsbox { display: grid; gap: 10px; padding: 12px 0 2px; border-top: 1px solid var(--seam); }
+  .tlsbox .hint code { font: 11px var(--mono); color: var(--text); }
   footer { display: flex; align-items: center; gap: 9px; padding: var(--s3) var(--s4) var(--s4); border-top: 1px solid var(--seam); }
   .foot { color: var(--text-faint); font-size: 11px; }
   .sp { flex: 1; }

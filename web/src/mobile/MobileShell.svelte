@@ -4,11 +4,13 @@
   import { getServer, resumeSession } from '../lib/api.js';
   import { SERVER_KEY, TOKEN_KEY } from '../lib/serverBase.mjs';
   import { isResumableSession } from '../lib/operatorStatus.mjs';
+  import Icon from '../lib/Icon.svelte';
   import Connect from './Connect.svelte';
   import FleetFeed from './FleetFeed.svelte';
   import Herd from './Herd.svelte';
   import LaunchSheet from './LaunchSheet.svelte';
   import MobileChat from './MobileChat.svelte';
+  import SearchScreen from './SearchScreen.svelte';
   import Sheet from './Sheet.svelte';
   import { createMobileData } from './data.svelte.js';
 
@@ -18,6 +20,8 @@
   let tab = $state('herd');
   let chat = $state(null);           // full-screen session descriptor
   let launchOpen = $state(false);
+  let launchDir = $state('');        // prefill from a history hit ("Ranch here")
+  let searchOpen = $state(false);
   let settingsOpen = $state(false);
   // #session=<id> deep link — a push notification's Click target. Resolved once the roster
   // knows the session, then scrubbed from the address.
@@ -42,6 +46,32 @@
     try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
     openSession(s);
   });
+
+  // Pull-to-refresh on the tab scroller: cosmetic pull past 46px triggers a real refresh.
+  // overscroll-behavior on <main> keeps the browser's own page-reload gesture out of the way.
+  let mainEl = $state(null);
+  let pull = $state(0);
+  let refreshing = $state(false);
+  let startY = 0, pulling = false;
+  function tstart(e) {
+    if (mainEl && mainEl.scrollTop <= 0) { startY = e.touches[0].clientY; pulling = true; }
+  }
+  function tmove(e) {
+    if (!pulling || refreshing) return;
+    const dy = e.touches[0].clientY - startY;
+    pull = dy > 0 && mainEl.scrollTop <= 0 ? Math.min(72, dy * 0.38) : 0;
+  }
+  async function tend() {
+    if (!pulling) return;
+    pulling = false;
+    if (pull > 46 && !refreshing) {
+      refreshing = true;
+      try { navigator.vibrate?.(8); } catch (e) {}
+      await Promise.allSettled([data.poll(), data.loadHosts()]);
+      refreshing = false;
+    }
+    pull = 0;
+  }
 
   const chatDesc = (s) => ({ kind: 'chat', id: s.id, agent: s.agent || 'claude', host: s.host, cwd: s.cwd, model: s.model, status: s.status, sessionId: s.sessionId, label: s.label || null });
   async function openSession(s) {
@@ -74,10 +104,16 @@
       {:else if liveCount}
         <span class="run"><span class="ldot"></span>{liveCount} running</span>
       {/if}
+      <button class="gear" onclick={() => (searchOpen = true)} aria-label="Search history"><Icon name="search" size={15} /></button>
       <button class="gear" onclick={() => (settingsOpen = true)} aria-label="Settings">&#8942;</button>
     </header>
 
-    <main>
+    <main bind:this={mainEl} ontouchstart={tstart} ontouchmove={tmove} ontouchend={tend} ontouchcancel={tend}>
+      {#if pull > 0 || refreshing}
+        <div class="ptr" style:height="{refreshing ? 40 : pull}px" aria-hidden="true">
+          <span class="pdot" class:armed={pull > 46 || refreshing} class:spin={refreshing}></span>
+        </div>
+      {/if}
       {#if tab === 'herd'}
         <Herd {data} onOpenSession={openSession} onLaunch={() => (launchOpen = true)} />
       {:else}
@@ -99,8 +135,17 @@
       {/key}
     {/if}
 
+    {#if searchOpen}
+      <SearchScreen {data}
+        onclose={() => (searchOpen = false)}
+        onOpenSession={(s) => { searchOpen = false; openSession(s); }}
+        onRanchAt={(cwd) => { searchOpen = false; launchDir = cwd; launchOpen = true; }} />
+    {/if}
+
     {#if launchOpen}
-      <LaunchSheet {data} onclose={() => (launchOpen = false)} onLaunched={(desc) => { launchOpen = false; chat = desc; }} />
+      {#key launchDir}
+        <LaunchSheet {data} initialDir={launchDir} onclose={() => { launchOpen = false; launchDir = ''; }} onLaunched={(desc) => { launchOpen = false; launchDir = ''; chat = desc; }} />
+      {/key}
     {/if}
 
     {#if settingsOpen}
@@ -134,6 +179,10 @@
   @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
 
   main { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+  .ptr { display: grid; place-items: center; overflow: hidden; transition: height .18s ease; }
+  .pdot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); transition: background .12s, transform .12s; }
+  .pdot.armed { background: var(--mercury); transform: scale(1.25); }
+  .pdot.spin { animation: breathe 1s ease-in-out infinite; }
 
   nav { flex: none; display: flex; align-items: stretch; border-top: 1px solid var(--seam); background: var(--bg); padding-bottom: env(safe-area-inset-bottom, 0px); }
   nav button { flex: 1; min-height: 52px; background: none; border: 0; color: var(--text-faint); font-size: 10px; letter-spacing: .18em; text-transform: uppercase; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 7px; }

@@ -1,17 +1,21 @@
 <script>
-  // Ranch a new agent from the phone: host, project, agent, permission mode — four decisions,
-  // recents first so the common case is two taps.
+  // Ranch a new agent from the phone: host, project, agent, permission mode — recents first, and
+  // every project remembers the combo it was last launched with, so the common case is two taps.
   import { launchSession } from '../lib/api.js';
   import { apiErrorMessage } from '../lib/apiRequest.mjs';
+  import { LAUNCH_DEFAULTS_KEY, launchDefaultsFor, parseLaunchDefaults, rememberLaunchDefaults, serializeLaunchDefaults } from '../lib/launchDefaults.mjs';
+  import { AGENTS, MODELS, PERMS } from '../lib/launchOptions.mjs';
   import { recentRootsForHost } from '../lib/recentRoots.mjs';
   import Sheet from './Sheet.svelte';
 
-  let { data, onclose, onLaunched } = $props();
+  let { data, onclose, onLaunched, initialDir = '' } = $props();
 
   let host = $state('local');
-  let dir = $state('');
+  // svelte-ignore state_referenced_locally
+  let dir = $state(initialDir);
   let brief = $state('');       // optional first instruction — the agent starts on it immediately
   let agent = $state('claude');
+  let model = $state(null);
   let perm = $state('auto');
   let worktree = $state(false);
   let busy = $state(false);
@@ -19,22 +23,33 @@
 
   let hosts = $derived(['local', ...data.d.hosts]);
   let roots = $derived(recentRootsForHost({ host, roots: data.d.recentRoots, sessions: data.d.sessions }));
+  let models = $derived(MODELS[agent] || MODELS.claude);
 
-  const AGENTS = [['claude', 'Claude'], ['codex', 'Codex'], ['opencode', 'OpenCode']];
-  const PERMS = [['default', 'Ask'], ['auto', 'Auto'], ['plan', 'Plan']];
+  let defaults = {};
+  try { defaults = parseLaunchDefaults(localStorage.getItem(LAUNCH_DEFAULTS_KEY)); } catch (e) {}
 
+  const setAgent = (v) => { agent = v; model = null; };
   function pickHost(h) {
     if (host !== h) { host = h; dir = ''; }
+  }
+  function pickDir(d) {
+    dir = d;
+    const known = launchDefaultsFor(defaults, host, d);
+    if (!known) return;
+    agent = known.agent; perm = known.perm; worktree = known.worktree;
+    model = (MODELS[known.agent] || []).some((m) => m.v === known.model) ? known.model : null;
   }
   async function go() {
     const target = dir.trim() || (host === 'local' ? data.d.localHome : '~');
     busy = true; error = '';
     try {
-      const r = await launchSession({ host, dir: target, agent, perm, worktree: worktree && host === 'local', prompt: brief.trim() || undefined });
+      const r = await launchSession({ host, dir: target, agent, model: model || undefined, perm, worktree: worktree && host === 'local', prompt: brief.trim() || undefined });
       if (r?.ok === false) throw new Error(r.error || 'launch failed');
       data.rememberRoot(host, target);
+      defaults = rememberLaunchDefaults(defaults, { host, dir: target, agent, perm, model, worktree: worktree && host === 'local' });
+      try { localStorage.setItem(LAUNCH_DEFAULTS_KEY, serializeLaunchDefaults(defaults)); } catch (e) {}
       await data.poll();
-      onLaunched?.({ kind: 'chat', id: r.id, agent, host, cwd: target, model: null, status: 'starting', sessionId: null });
+      onLaunched?.({ kind: 'chat', id: r.id, agent, host, cwd: target, model: model || null, status: 'starting', sessionId: null });
     } catch (e) {
       error = apiErrorMessage(e, 'Launch failed.');
     } finally {
@@ -56,7 +71,7 @@
     {#if roots.length}
       <div class="roots">
         {#each roots.slice(0, 5) as r (r.dir)}
-          <button class="root" class:on={dir === r.dir} onclick={() => (dir = r.dir)}>
+          <button class="root" class:on={dir === r.dir} onclick={() => pickDir(r.dir)}>
             <b>{r.dir.split(/[\\/]/).filter(Boolean).pop()}</b>
             <span>{r.dir}</span>
           </button>
@@ -71,15 +86,24 @@
 
     <h2>Agent</h2>
     <div class="chips">
-      {#each AGENTS as [id, label] (id)}
-        <button class="chip" class:on={agent === id} onclick={() => (agent = id)}>{label}</button>
+      {#each AGENTS as a (a.v)}
+        <button class="chip" class:on={agent === a.v} onclick={() => setAgent(a.v)}>{a.l}</button>
       {/each}
     </div>
 
+    {#if models.length > 1}
+      <h2>Model</h2>
+      <div class="chips">
+        {#each models as m (m.v ?? 'default')}
+          <button class="chip" class:on={model === m.v} onclick={() => (model = m.v)}>{m.l}</button>
+        {/each}
+      </div>
+    {/if}
+
     <h2>Permissions</h2>
     <div class="chips">
-      {#each PERMS as [id, label] (id)}
-        <button class="chip" class:on={perm === id} onclick={() => (perm = id)}>{label}</button>
+      {#each PERMS as p (p.v)}
+        <button class="chip" class:on={perm === p.v} onclick={() => (perm = p.v)}>{p.l}</button>
       {/each}
       {#if host === 'local'}
         <button class="chip" class:on={worktree} onclick={() => (worktree = !worktree)}>Worktree</button>

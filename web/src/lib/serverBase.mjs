@@ -31,9 +31,9 @@ export function parsePairInput(text) {
   return { base, token: m ? m[1] : '' };
 }
 
-export function buildPairUrl(address, port, token) {
+export function buildPairUrl(address, port, token, { tls = false } = {}) {
   if (!address || !token) return '';
-  return 'http://' + address + ':' + port + '/#tk=' + token;
+  return (tls ? 'https' : 'http') + '://' + address + ':' + port + '/#tk=' + token;
 }
 
 // ws(s):// URL for a socket path — derived from the configured base, else the current page.

@@ -21,6 +21,12 @@ assert.equal(normalizeBase('http://'), '');
   assert.equal(p.token, 'abcdef0123456789abcdef0123456789');
 }
 assert.deepEqual(parsePairInput('10.1.2.3:7879'), { base: 'http://10.1.2.3:7879', token: '' });
+assert.equal(buildPairUrl('100.101.1.2', 7879, 'aabbccddeeff0011', { tls: true }), 'https://100.101.1.2:7879/#tk=aabbccddeeff0011');
+{
+  const p = parsePairInput('https://corral.tail1234.ts.net:7879/#tk=aabbccddeeff0011');
+  assert.equal(p.base, 'https://corral.tail1234.ts.net:7879');           // https pair links round-trip
+  assert.equal(p.token, 'aabbccddeeff0011');
+}
 assert.equal(parsePairInput('http://x/#tk=short').token, '');                    // too short to be a token
 assert.equal(buildPairUrl('', 7879, 'aabbccddeeff0011'), '');
 assert.equal(buildPairUrl('10.0.0.1', 7879, ''), '');

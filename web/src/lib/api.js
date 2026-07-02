@@ -49,6 +49,10 @@ export async function killSession(id) {
   return mutate('/api/chat/kill?id=' + encodeURIComponent(id), { method: 'POST' });
 }
 
+export async function interruptSession(id) {
+  return mutate('/api/chat/interrupt?id=' + encodeURIComponent(id), { method: 'POST' });
+}
+
 export async function removeSession(id) {
   return mutate('/api/chat/remove?id=' + encodeURIComponent(id), { method: 'POST' });
 }
@@ -137,10 +141,12 @@ export function termSocket({ host = 'local', target = '', cwd = '', cols = 80, r
 
 // --- remote access (phone pairing) — loopback/desktop only; the server hides secrets otherwise ---
 export async function getRemoteConfig() { return json('/api/remote'); }
-export async function setRemoteConfig({ enabled, rotate } = {}) {
+export async function setRemoteConfig({ enabled, rotate, certPath, keyPath } = {}) {
   const q = new URLSearchParams();
   if (enabled != null) q.set('enabled', enabled ? '1' : '0');
   if (rotate) q.set('rotate', '1');
+  if (certPath != null) q.set('certPath', certPath);
+  if (keyPath != null) q.set('keyPath', keyPath);
   return json('/api/remote?' + q.toString(), { method: 'POST', retries: 0 });
 }
 

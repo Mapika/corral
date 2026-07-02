@@ -11,6 +11,7 @@ export function createMobileData() {
     hosts: [],
     localHome: '~',
     recentRoots: [],
+    loaded: false,      // first roster snapshot has landed — screens can trust "empty"
     live: false,        // events socket delivering — polls stand down
     offline: false,     // neither socket nor poll can reach the server
     error: '',
@@ -22,7 +23,7 @@ export function createMobileData() {
     if (d.live) return;
     try {
       d.sessions = await listSessions();
-      d.offline = false; d.error = '';
+      d.loaded = true; d.offline = false; d.error = '';
     } catch (e) {
       d.offline = true; d.error = apiErrorMessage(e, 'Could not reach the corral server.');
     }
@@ -43,7 +44,7 @@ export function createMobileData() {
       let msg; try { msg = JSON.parse(m.data); } catch (e) { return; }
       d.live = true; d.offline = false; d.error = '';
       retry = 0;
-      if (msg.type === 'sessions') d.sessions = msg.sessions;
+      if (msg.type === 'sessions') { d.sessions = msg.sessions; d.loaded = true; }
     };
     ws.onclose = () => {
       d.live = false;

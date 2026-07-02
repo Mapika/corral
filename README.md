@@ -51,6 +51,8 @@ under your existing login — it never touches API keys.
 
 ## The phone app
 
+<img src="docs/media/corral-phone.gif" alt="The phone console: decision cards, one-tap Allow, live fleet streaming" width="300" align="right" />
+
 Click the phone icon in the titlebar, enable **remote access**, and scan the QR:
 
 - **With the Corral Android app** ([Releases](../../releases), `.apk`) — scan from the pairing
@@ -65,9 +67,13 @@ agent streaming in real time), and **ranch** (launch a new agent on any host, re
 Opening a chat gives the full transcript with a docked decision sheet when the agent is waiting.
 
 Pairing uses a durable token separate from the desktop's per-run token; it survives restarts, and
-"New code" un-pairs every phone. The connection is plain HTTP on your local network — pair on
-networks you trust (home Wi-Fi or a [Tailscale](https://tailscale.com) tailnet, which also makes
-it work away from home). Details in [SECURITY.md](SECURITY.md).
+"New code" un-pairs every phone. By default the connection is plain HTTP on your local network —
+pair on networks you trust (home Wi-Fi or a [Tailscale](https://tailscale.com) tailnet, which
+also makes it work away from home). On a tailnet, run `tailscale cert` and point the pairing
+dialog's Transport settings at the PEM pair to serve HTTPS instead. Details in
+[SECURITY.md](SECURITY.md).
+
+<br clear="right" />
 
 ## Phone notifications
 

@@ -5,21 +5,10 @@
   import { lsDir } from './lib/api.js';
   import { apiErrorMessage } from './lib/apiRequest.mjs';
   import { dirPickerListState, joinPath, launchTargetFromManual, parsePathInput, stripTrailingSlash, withTrailingSlash } from './lib/dirPickerPath.mjs';
+  import { AGENTS, MODELS, PERMS } from './lib/launchOptions.mjs';
   import Icon from './lib/Icon.svelte';
 
   let { host, start = '/', recentRoots = [], launchError = '', onpick, oncancel } = $props();
-
-  // Launch options. Models are bare `--model` aliases (SAFE_ARG-clean); the backend defaults the
-  // model when null. Permission modes map onto each agent's native policy knobs in agents/*.js;
-  // `default` (Ask) routes tool approvals through the in-chat permission card. opencode is
-  // local-only for now and its model selection isn't wired (server default applies).
-  const AGENTS = [{ v: 'claude', l: 'Claude' }, { v: 'codex', l: 'Codex' }, { v: 'opencode', l: 'OpenCode' }];
-  const MODELS = {
-    claude: [{ v: null, l: 'Default' }, { v: 'opus', l: 'Opus' }, { v: 'sonnet', l: 'Sonnet' }, { v: 'haiku', l: 'Haiku' }],
-    codex: [{ v: null, l: 'Default' }, { v: 'gpt-5.3-codex', l: 'GPT-5.3 Codex' }],
-    opencode: [{ v: null, l: 'Default' }],
-  };
-  const PERMS = [{ v: 'auto', l: 'Auto' }, { v: 'acceptEdits', l: 'Accept edits' }, { v: 'default', l: 'Ask' }, { v: 'plan', l: 'Plan' }];
   let agent = $state('claude');
   let model = $state(null);
   let perm = $state('auto');
