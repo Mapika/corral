@@ -4,5 +4,12 @@
     "externalBin": [],
     "resources": null,
     "targets": []
+  },
+  "plugins": {
+    "deep-link": {
+      "mobile": [
+        { "scheme": ["corral"], "appLink": false }
+      ]
+    }
   }
 }

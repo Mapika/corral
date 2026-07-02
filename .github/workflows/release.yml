@@ -113,7 +113,7 @@ jobs:
           export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
           npx tauri android init --ci
 
-      - name: Patch AndroidManifest (cleartext LAN pairing + camera for QR scan)
+      - name: Patch AndroidManifest (cleartext LAN pairing + camera for QR scan + corral:// scheme)
         run: |
           MANIFEST=src-tauri/gen/android/app/src/main/AndroidManifest.xml
           if grep -q usesCleartextTraffic "$MANIFEST"; then
@@ -123,6 +123,10 @@ jobs:
           fi
           grep -q android.permission.CAMERA "$MANIFEST" || \
             sed -i 's#<uses-permission android:name="android.permission.INTERNET" */>#<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.CAMERA" />#' "$MANIFEST"
+          # corral:// deep link (ntfy notification taps). tauri android init usually materializes
+          # this from plugins.deep-link in tauri.android.conf.json — inject only if it didn't.
+          grep -q 'android:scheme="corral"' "$MANIFEST" || \
+            sed -i '0,\#</activity>#s##    <intent-filter>\n                <action android:name="android.intent.action.VIEW" />\n                <category android:name="android.intent.category.DEFAULT" />\n                <category android:name="android.intent.category.BROWSABLE" />\n                <data android:scheme="corral" />\n            </intent-filter>\n        </activity>#' "$MANIFEST"
           cat "$MANIFEST"
 
       - name: Build the APK (arm64)

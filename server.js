@@ -807,6 +807,9 @@ if (SELFTEST) {
     a.equal(pushCfg.notificationExtras({ kind: 'input', sessionId: 's', requestId: 'r', base: 'http://10.0.0.2:7879', token: 'tok', actionsEnabled: false }).actions, undefined);   // opt-in
     a.equal(pushCfg.notificationExtras({ kind: 'done', sessionId: 's', base: 'http://10.0.0.2:7879', token: 'tok', actionsEnabled: true }).actions, undefined);   // actions only on asks
     a.deepEqual(pushCfg.notificationExtras({ kind: 'input', sessionId: 's', requestId: 'r', base: '', token: 'tok', actionsEnabled: true }), {});   // remote off => no dead links
+    const ax = pushCfg.notificationExtras({ kind: 'input', sessionId: 'ses 1', requestId: 'r', base: 'http://10.0.0.2:7879', token: 'tok', actionsEnabled: true, appClick: true });
+    a.equal(ax.click, 'corral://session/ses%201');   // appClick opens the APK; actions still target the LAN listener
+    a.ok(ax.actions.includes('http://10.0.0.2:7879/api/chat/permission'));
   }
   console.log('selftest ok'); process.exit(0);
   })().catch(e => { console.error(e); process.exit(1); });
@@ -1112,7 +1115,7 @@ const handleRequest = async (req, res) => {
       try {
         const q = url.searchParams;
         const next = {};
-        for (const k of ['enabled', 'actions', 'input', 'done', 'fail']) if (q.has(k)) next[k] = q.get(k) === '1';
+        for (const k of ['enabled', 'actions', 'appClick', 'input', 'done', 'fail']) if (q.has(k)) next[k] = q.get(k) === '1';
         if (q.has('server')) next.server = q.get('server');
         if (q.has('topic')) next.topic = q.get('topic');
         return res.end(JSON.stringify({ ok: true, config: pushCfg.set(next) }));

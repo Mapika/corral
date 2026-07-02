@@ -28,7 +28,7 @@
     error = ''; busyAction = 'save';
     try {
       const r = await setPushConfig({
-        enabled: cfg.enabled, actions: cfg.actions, server: cfg.server, topic: cfg.topic,
+        enabled: cfg.enabled, actions: cfg.actions, appClick: cfg.appClick, server: cfg.server, topic: cfg.topic,
         input: cfg.events.input, done: cfg.events.done, fail: cfg.events.fail,
       });
       cfg = { ...r.config, topic: cfg.topic };
@@ -87,6 +87,14 @@
             <label class="check"><input type="checkbox" bind:checked={cfg.events.input} /><span>needs a decision</span></label>
             <label class="check"><input type="checkbox" bind:checked={cfg.events.done} /><span>turn complete</span></label>
             <label class="check"><input type="checkbox" bind:checked={cfg.events.fail} /><span>died unexpectedly</span></label>
+          </div>
+        </div>
+
+        <div class="row">
+          <span class="olabel">Tap opens</span>
+          <div class="checks">
+            <label class="check"><input type="checkbox" bind:checked={cfg.appClick} /><span>the Corral app instead of the browser</span></label>
+            <span class="finehint">Needs the Corral APK installed — without it a tap does nothing. Off, taps open the paired console in the phone browser.</span>
           </div>
         </div>
 

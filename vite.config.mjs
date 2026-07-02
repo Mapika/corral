@@ -1,9 +1,11 @@
 import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('.', import.meta.url)); // project root (where this config lives)
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
 
 // While the backend is still booting, answer proxy errors with a quiet 503 (the client retries)
 // instead of dumping a scary connect-ETIMEDOUT stack trace into the dev console.
@@ -35,6 +37,7 @@ function backend() {
 
 export default defineConfig({
   root: 'web',
+  define: { __APP_VERSION__: JSON.stringify(pkg.version) },   // the APK's update check compares against this
   plugins: [svelte(), backend()],
   build: { outDir: '../dist', emptyOutDir: true },
   server: {

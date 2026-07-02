@@ -64,7 +64,10 @@ Click the phone icon in the titlebar, enable **remote access**, and scan the QR:
 The phone gets its own console, built for thumbs: **Herd** (what needs you first — answer an
 agent's permission prompt with one tap, resume or dismiss dead sessions), **Fleet** (every live
 agent streaming in real time), and **ranch** (launch a new agent on any host, recents first).
-Opening a chat gives the full transcript with a docked decision sheet when the agent is waiting.
+Opening a chat gives the full transcript with a docked decision sheet when the agent is waiting,
+plus a camera button — snap the whiteboard or an error on another screen and it lands in the
+session's working directory, referenced in your message. The console keeps working through
+dead spots: a service worker serves the app shell and your last herd snapshot offline.
 
 Pairing uses a durable token separate from the desktop's per-run token; it survives restarts, and
 "New code" un-pairs every phone. By default the connection is plain HTTP on your local network —
@@ -80,7 +83,10 @@ dialog's Transport settings at the PEM pair to serve HTTPS instead. Details in
 Click the bell in the titlebar: pick a topic, install the ntfy app, subscribe. Corral pushes
 "needs a decision", "turn complete", and "died unexpectedly" — with a cooldown, and never for
 sessions you ended yourself. Works with ntfy.sh or any self-hosted ntfy; headless runs can set
-`CORRAL_NTFY_TOPIC` / `CORRAL_NTFY_SERVER` instead.
+`CORRAL_NTFY_TOPIC` / `CORRAL_NTFY_SERVER` instead. Tapping a notification opens the session in
+the phone browser; if you use the Android app, flip **Tap opens → the Corral app** and taps
+deep-link (`corral://`) into the installed APK instead. The app checks for newer releases from
+its settings sheet.
 
 ## Security model (short version)
 

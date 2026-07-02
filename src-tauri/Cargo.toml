@@ -24,6 +24,11 @@ log = "0.4"
 tauri = { version = "2.11.3", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-notification = "2"
+# Compiled for every target so capability validation sees their permissions, but only the mobile
+# shell registers them: deep-link receives corral:// notification taps, opener launches the
+# system browser for the release page.
+tauri-plugin-deep-link = "2"
+tauri-plugin-opener = "2"
 
 # Desktop-only: tray, sidecar shell, global shortcut, single instance, token minting. The mobile
 # app is a thin paired client (see lib.rs) and must not pull these in — several don't compile on

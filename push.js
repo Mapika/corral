@@ -21,6 +21,9 @@ const DEFAULTS = Object.freeze({
   // One-tap Allow/Deny buttons on permission notifications. Opt-in: the action URLs must embed
   // the phone-pairing token, so anyone who can read the ntfy topic could answer prompts.
   actions: false,
+  // Click opens the installed Corral app (corral:// scheme) instead of the browser console.
+  // Opt-in: without the APK a corral:// link is a dead tap.
+  appClick: false,
   events: Object.freeze({ input: true, done: true, fail: true }),
 });
 
@@ -39,7 +42,7 @@ function get() {
   const server = process.env.CORRAL_NTFY_SERVER || conf.server;
   const topic = process.env.CORRAL_NTFY_TOPIC || conf.topic;
   const enabled = process.env.CORRAL_NTFY_TOPIC ? true : conf.enabled;
-  return { enabled, server, topic, actions: !!conf.actions, events: { ...conf.events } };
+  return { enabled, server, topic, actions: !!conf.actions, appClick: !!conf.appClick, events: { ...conf.events } };
 }
 
 const SAFE_TOPIC = /^[A-Za-z0-9_-]{1,64}$/;
@@ -57,6 +60,7 @@ function set(next = {}) {
     merged.topic = topic;
   }
   if (next.actions != null) merged.actions = !!next.actions;
+  if (next.appClick != null) merged.appClick = !!next.appClick;
   for (const k of Object.keys(DEFAULTS.events)) if (next[k] != null) merged.events[k] = !!next[k];
   conf = merged;
   try {
@@ -100,9 +104,13 @@ function messageFor(kind, s = {}, extra = {}) {
 // console on the session; permission asks optionally carry one-tap Allow/Deny http actions that
 // POST straight back to the LAN listener. Both are dropped when remote access is off — a click
 // URL nobody can reach is worse than none.
-function notificationExtras({ kind, sessionId, requestId, base, token, actionsEnabled } = {}) {
+function notificationExtras({ kind, sessionId, requestId, base, token, actionsEnabled, appClick } = {}) {
   if (!base || !sessionId) return {};
-  const out = { click: base + '/#session=' + encodeURIComponent(sessionId) };
+  const out = {
+    click: appClick
+      ? 'corral://session/' + encodeURIComponent(sessionId)          // opens the installed APK
+      : base + '/#session=' + encodeURIComponent(sessionId),
+  };
   if (kind === 'input' && actionsEnabled && token && requestId) {
     const act = (d) => base + '/api/chat/permission?id=' + encodeURIComponent(sessionId) + '&requestId=' + encodeURIComponent(requestId) + '&decision=' + d;
     out.actions = [
@@ -153,7 +161,7 @@ function notifySession(kind, s, extra = {}) {
   if (now - (lastSent.get(key) || 0) < COOLDOWN_MS) return;
   lastSent.set(key, now);
   const { base, token } = remoteBase();
-  const extras = notificationExtras({ kind, sessionId: s && s.id, requestId: extra.requestId, base, token, actionsEnabled: cfg.actions });
+  const extras = notificationExtras({ kind, sessionId: s && s.id, requestId: extra.requestId, base, token, actionsEnabled: cfg.actions, appClick: cfg.appClick });
   send({ ...messageFor(kind, s, extra), ...extras }, cfg).catch((e) => console.error('push failed:', e.message));
 }
 

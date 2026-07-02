@@ -100,6 +100,10 @@ pub fn run() {
 fn run_mobile() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        // corral://session/<id> notification taps land here (scheme registered in the Android
+        // manifest); the JS layer routes them to the session chat.
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![get_token, set_attention])
         .setup(|app| {
             tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default()).build()?;

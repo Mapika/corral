@@ -2,6 +2,7 @@
   // The phone console: HERD (decide) · RANCH (launch) · FLEET (watch), with chat as a full-screen
   // push. Built for thumbs on the Ink system — flush surfaces, seams, one warm signal.
   import { getServer, resumeSession } from '../lib/api.js';
+  import { releaseUpdate, sessionFromDeepLink } from '../lib/appUpdate.mjs';
   import { SERVER_KEY, TOKEN_KEY } from '../lib/serverBase.mjs';
   import { isResumableSession } from '../lib/operatorStatus.mjs';
   import Icon from '../lib/Icon.svelte';
@@ -27,6 +28,10 @@
   // knows the session, then scrubbed from the address.
   let deepLink = $state((typeof location !== 'undefined' && (location.hash.match(/[#&]session=([\w-]+)/) || [])[1]) || null);
 
+  // APK version + update check against GitHub releases (standalone shell only).
+  const VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev';
+  let update = $state(null);         // null | {checking} | {latest,url,newer} | {error}
+
   const data = createMobileData();
 
   let liveCount = $derived(data.d.sessions.filter((s) => s.status === 'busy' || s.status === 'starting').length);
@@ -46,6 +51,35 @@
     try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
     openSession(s);
   });
+
+  // corral://session/<id> — the APK's notification deep link. A cold start arrives via
+  // getCurrent, a running app via onOpenUrl; both funnel into the same roster-resolved deepLink.
+  $effect(() => {
+    if (!standalone || typeof window === 'undefined' || !window.__TAURI_INTERNALS__) return;
+    let unlisten = null, gone = false;
+    (async () => {
+      try {
+        const { getCurrent, onOpenUrl } = await import('@tauri-apps/plugin-deep-link');
+        const take = (urls) => { const id = sessionFromDeepLink(urls && urls[0]); if (id) deepLink = id; };
+        take(await getCurrent());
+        const un = await onOpenUrl(take);
+        if (gone) un(); else unlisten = un;
+      } catch (e) {}
+    })();
+    return () => { gone = true; try { unlisten && unlisten(); } catch (e) {} };
+  });
+
+  async function checkUpdate() {
+    update = { checking: true };
+    try {
+      const r = await fetch('https://api.github.com/repos/Mapika/corral/releases/latest', { headers: { accept: 'application/vnd.github+json' } });
+      if (!r.ok) throw new Error('GitHub said ' + r.status);
+      update = releaseUpdate(await r.json(), VERSION);
+    } catch (e) { update = { error: e?.message || 'update check failed' }; }
+  }
+  async function openRelease(url) {
+    try { const { openUrl } = await import('@tauri-apps/plugin-opener'); await openUrl(url); } catch (e) {}
+  }
 
   // Pull-to-refresh on the tab scroller: cosmetic pull past 46px triggers a real refresh.
   // overscroll-behavior on <main> keeps the browser's own page-reload gesture out of the way.
@@ -157,6 +191,18 @@
           {#if data.d.error}<p class="errline">{data.d.error}</p>{/if}
           {#if standalone}
             <button class="unpair" onclick={unpair}>Unpair from this server</button>
+            <h2 class="apph">App</h2>
+            <p class="kv"><span>Version</span><code>v{VERSION}</code></p>
+            <button class="unpair checkupd" onclick={checkUpdate} disabled={update?.checking}>{update?.checking ? 'checking…' : 'Check for updates'}</button>
+            {#if update && !update.checking}
+              {#if update.error}
+                <p class="errline">{update.error}</p>
+              {:else if update.newer}
+                <button class="getupd" onclick={() => openRelease(update.url)}>Get v{update.latest} from GitHub</button>
+              {:else if update.latest}
+                <p class="hint">v{update.latest} is the latest — you're current.</p>
+              {/if}
+            {/if}
           {/if}
           <p class="hint">Phone push (ntfy) and remote access are configured on the desktop app.</p>
         </div>
@@ -195,6 +241,10 @@
   .kv code { font: 12px var(--mono); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .errline { color: var(--alert); font-size: 12px; }
   .unpair { margin-top: var(--s4); width: 100%; min-height: 48px; background: var(--chip); color: var(--text); border: 0; border-radius: var(--pill); font: var(--w-reg) 14px var(--sans); cursor: pointer; }
+  .apph { margin-top: var(--s5) !important; }
+  .checkupd { margin-top: var(--s3); }
+  .checkupd:disabled { opacity: .6; }
+  .getupd { margin-top: var(--s3); width: 100%; min-height: 48px; background: var(--paper); color: var(--ink); border: 0; border-radius: var(--pill); font: var(--w-med) 14px var(--sans); cursor: pointer; }
   .hint { margin-top: var(--s3); color: var(--text-faint); font-size: 11.5px; line-height: 1.5; }
 
   @media (prefers-reduced-motion: reduce) { .ldot { animation: none; } }

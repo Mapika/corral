@@ -152,9 +152,9 @@ export async function setRemoteConfig({ enabled, rotate, certPath, keyPath } = {
 
 // --- phone push (ntfy relay) ---
 export async function getPushConfig() { return json('/api/push'); }
-export async function setPushConfig({ enabled, actions, server, topic, input, done, fail } = {}) {
+export async function setPushConfig({ enabled, actions, appClick, server, topic, input, done, fail } = {}) {
   const q = new URLSearchParams();
-  for (const [k, v] of [['enabled', enabled], ['actions', actions], ['input', input], ['done', done], ['fail', fail]]) if (v != null) q.set(k, v ? '1' : '0');
+  for (const [k, v] of [['enabled', enabled], ['actions', actions], ['appClick', appClick], ['input', input], ['done', done], ['fail', fail]]) if (v != null) q.set(k, v ? '1' : '0');
   if (server != null) q.set('server', server);
   if (topic != null) q.set('topic', topic);
   return json('/api/push?' + q.toString(), { method: 'POST', retries: 0 });
