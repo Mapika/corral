@@ -18,9 +18,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest        # Apple silicon
-            bundles: dmg
-          - platform: macos-13            # Intel
+          # Apple silicon only — GitHub retired the Intel (macos-13) hosted runners.
+          # Intel Mac users build from source; a universal build can come later.
+          - platform: macos-latest
             bundles: dmg
           - platform: ubuntu-22.04
             bundles: appimage,deb
