@@ -12,6 +12,9 @@ dark console, and get buzzed on your phone when an agent needs a decision.
   daemons to install on remotes.
 - **Phone push** — "Claude needs you" lands on your phone via [ntfy](https://ntfy.sh) (or your
   self-hosted relay) while you're away from the desk.
+- **A real phone app** — pair the Android app (or your phone's browser) with a QR code and run
+  the ranch from the couch: answer permission prompts with one tap, watch the fleet stream live,
+  launch new agents.
 - **Operator calm** — a dashboard that answers "what's running, what's waiting on me, what broke"
   and stays quiet about everything else.
 
@@ -28,7 +31,8 @@ Forward a remote service to localhost, then copy or open it.
 ## Install
 
 Grab the installer for your OS from [Releases](../../releases) — `.dmg` (macOS, Apple silicon),
-`.exe` (Windows), `.AppImage`/`.deb` (Linux). Intel Mac users can build from source for now.
+`.exe` (Windows), `.AppImage`/`.deb` (Linux), `.apk` (Android — the phone companion, see below).
+Intel Mac users can build from source for now.
 
 > Builds are currently unsigned. macOS: right-click the app → **Open** the first time.
 > Windows: SmartScreen → **More info** → **Run anyway**.
@@ -44,6 +48,26 @@ npm run dev        # opens on http://localhost:5173
 Agents are the CLIs you already have: [`claude`](https://claude.com/claude-code), `codex`, or
 `opencode` on your PATH (locally, and on any remote host you want to ranch). Corral runs them
 under your existing login — it never touches API keys.
+
+## The phone app
+
+Click the phone icon in the titlebar, enable **remote access**, and scan the QR:
+
+- **With the Corral Android app** ([Releases](../../releases), `.apk`) — scan from the pairing
+  screen (or paste the link) and you're in.
+- **With any camera** — the QR is a plain link; it opens the mobile console in the phone's
+  browser, already authenticated. *Add to Home Screen* makes it feel installed. This also works
+  on iOS.
+
+The phone gets its own console, built for thumbs: **Herd** (what needs you first — answer an
+agent's permission prompt with one tap, resume or dismiss dead sessions), **Fleet** (every live
+agent streaming in real time), and **ranch** (launch a new agent on any host, recents first).
+Opening a chat gives the full transcript with a docked decision sheet when the agent is waiting.
+
+Pairing uses a durable token separate from the desktop's per-run token; it survives restarts, and
+"New code" un-pairs every phone. The connection is plain HTTP on your local network — pair on
+networks you trust (home Wi-Fi or a [Tailscale](https://tailscale.com) tailnet, which also makes
+it work away from home). Details in [SECURITY.md](SECURITY.md).
 
 ## Phone notifications
 
@@ -78,9 +102,10 @@ server.js            Node backend: HTTP + WebSocket, auth/origin gate, file & tu
 chat.js              agent session lifecycle — local process or `ssh host …`
 agents/              adapters: claude (stream-json), codex (app-server), opencode (HTTP)
 push.js              phone push via ntfy-compatible relays
+remote.js            phone pairing: opt-in LAN listener + durable pairing token
 tunnels.js           `ssh -L` port-forward management
-web/                 Svelte 5 frontend (Vite)
-src-tauri/           Rust desktop shell: mints the auth token, runs server.js as a sidecar
+web/                 Svelte 5 frontend (Vite); web/src/mobile/ is the phone console
+src-tauri/           Rust shell: desktop (token + server.js sidecar) and the Android app
 DESIGN.md            the "Ink" visual system    SECURITY.md   threat model
 ```
 
