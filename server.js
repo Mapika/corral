@@ -1,4 +1,5 @@
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -769,6 +770,8 @@ if (SELFTEST) {
   a.equal(remoteCfg.isLoopbackAddr('::ffff:127.0.0.1'), true);
   a.equal(remoteCfg.isLoopbackAddr('192.168.1.5'), false);
   a.equal(remoteCfg.isLoopbackAddr(undefined), false);
+  // TLS pair loading: both files or a path-naming error (no silent plaintext fallback)
+  a.throws(() => remoteCfg.loadTls({ certPath: 'Z:/nope.crt', keyPath: 'Z:/nope.key' }), /could not read certificate at Z:\/nope.crt/);
   a.deepEqual(remoteCfg.lanAddresses({
     lo: [{ family: 'IPv4', address: '127.0.0.1', internal: true }],
     eth0: [{ family: 'IPv4', address: '10.1.2.3', internal: false }, { family: 'IPv6', address: 'fe80::1', internal: false }],
@@ -846,18 +849,21 @@ const handleRequest = async (req, res) => {
         const next = {};
         if (q.has('enabled')) next.enabled = q.get('enabled') === '1';
         if (q.has('port')) next.port = q.get('port');
+        if (q.has('certPath')) next.certPath = q.get('certPath');
+        if (q.has('keyPath')) next.keyPath = q.get('keyPath');
         if (q.get('rotate') === '1') next.rotate = true;
         remoteCfg.set(next);
+        stopRemoteListener();        // config may have changed scheme/port — always re-listen fresh
         syncRemoteListener();
       } catch (e) {
         res.statusCode = 400; return res.end(JSON.stringify({ ok: false, error: String(e.message || e) }));
       }
     }
     const cfg = remoteCfg.get();
-    const out = { ok: true, enabled: cfg.enabled, port: cfg.port, running: !!(remoteSrv && remoteSrv.listening), error: remoteErr };
-    // The pairing secret and addresses only ever go to the desktop shell (loopback) — a remote
-    // caller already knows its own address and must not be able to read the token back.
-    if (loopback) { out.addresses = remoteCfg.lanAddresses(); out.token = cfg.token; }
+    const out = { ok: true, enabled: cfg.enabled, port: cfg.port, tls: cfg.tls, running: !!(remoteSrv && remoteSrv.listening), error: remoteErr };
+    // The pairing secret, cert paths and addresses only ever go to the desktop shell (loopback) —
+    // a remote caller already knows its own address and must not be able to read the token back.
+    if (loopback) { out.addresses = remoteCfg.lanAddresses(); out.token = cfg.token; out.certPath = cfg.certPath; out.keyPath = cfg.keyPath; }
     return res.end(JSON.stringify(out));
   }
   if (demo && await demo.handleApi(req, res, url)) return;
@@ -1053,6 +1059,12 @@ const handleRequest = async (req, res) => {
     res.setHeader('content-type', 'application/json');
     return res.end(JSON.stringify(chat.list()));
   }
+  // stop the current turn but keep the session alive — the fleet view's long-press "whoa there"
+  if (url.pathname === '/api/chat/interrupt' && req.method === 'POST') {
+    const ok = chat.interrupt(url.searchParams.get('id'));
+    res.setHeader('content-type', 'application/json');
+    return res.end(JSON.stringify({ ok: ok !== false }));
+  }
   if (url.pathname === '/api/chat/kill' && req.method === 'POST') {
     chat.kill(url.searchParams.get('id'));
     res.setHeader('content-type', 'application/json');
@@ -1180,13 +1192,28 @@ const handleUpgrade = (req, socket, head) => {
 };
 server.on('upgrade', handleUpgrade);
 
-// --- LAN listener for remote access (phone pairing) — opt-in, stopped again on disable ---
+// --- LAN listener for remote access (phone pairing) — opt-in, stopped again on disable.
+// With a PEM pair configured (tailscale cert / mkcert / real cert) it serves TLS instead. ---
 let remoteSrv = null, remoteErr = '';
+function stopRemoteListener() {
+  if (!remoteSrv) return;
+  const srv = remoteSrv;
+  remoteSrv = null;
+  try { srv.close(); } catch (e) {}
+  console.log('corral remote access stopped');
+}
 function syncRemoteListener() {
   const cfg = remoteCfg.get();
   if (cfg.enabled && !remoteSrv) {
     remoteErr = '';
-    const srv = http.createServer(handleRequest);
+    let srv;
+    try {
+      srv = cfg.tls ? https.createServer(remoteCfg.loadTls(), handleRequest) : http.createServer(handleRequest);
+    } catch (e) {
+      remoteErr = String((e && e.message) || e);   // unreadable cert/key — surface in the pairing UI
+      console.error('[remote] tls:', remoteErr);
+      return;
+    }
     srv.on('upgrade', handleUpgrade);
     srv.on('error', e => {
       remoteErr = e && e.code === 'EADDRINUSE' ? `port ${cfg.port} is already in use` : String((e && e.message) || e);
@@ -1195,12 +1222,9 @@ function syncRemoteListener() {
       if (remoteSrv === srv) remoteSrv = null;
     });
     remoteSrv = srv;
-    srv.listen(cfg.port, '0.0.0.0', () => console.log(`corral remote access on 0.0.0.0:${cfg.port}`));
+    srv.listen(cfg.port, '0.0.0.0', () => console.log(`corral remote access on ${cfg.tls ? 'https' : 'http'}://0.0.0.0:${cfg.port}`));
   } else if (!cfg.enabled && remoteSrv) {
-    const srv = remoteSrv;
-    remoteSrv = null;
-    try { srv.close(); } catch (e) {}
-    console.log('corral remote access stopped');
+    stopRemoteListener();
   }
 }
 
@@ -1307,7 +1331,7 @@ wss.on('connection', (ws, req) => {
 const PORT = process.env.PORT || 7878;
 const BIND = process.env.CORRAL_BIND || process.env.CODAPP_BIND || '127.0.0.1';   // loopback only; never 0.0.0.0
 if (!demo) tunnels.restorePersisted();                   // reap orphaned ssh forwards, then bring last run's tunnels back up
-syncRemoteListener();                                    // phone pairing left enabled last run comes back up with it
+if (!demo) syncRemoteListener();                         // phone pairing left enabled last run comes back up with it
 // Kill every child (agent sessions + ssh forwards) and flush the roster on the way out. The
 // 'exit' hook covers any path that actually brings the process down — including a fatal throw —
 // while the uncaughtException handler above deliberately keeps the sidecar alive.

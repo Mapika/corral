@@ -18,9 +18,14 @@ tunnels — so access to it is the security boundary.
   client can't read the credential back; remote callers also cannot change remote-access settings.
   Allowed browser origins for the phone are restricted to private-network hosts (RFC 1918 +
   Tailscale CGNAT) — public origins stay blocked, so internet-side DNS rebinding still fails.
-  Tradeoff: the transport is plain HTTP, so the pairing token and traffic are visible to the local
-  network path — enable it on trusted networks only (home Wi-Fi, tailnet), and rotate the code
-  from the pairing dialog if a phone is lost.
+  Tradeoff: by default the transport is plain HTTP, so the pairing token and traffic are visible
+  to the local network path — enable it on trusted networks only (home Wi-Fi, tailnet), and
+  rotate the code from the pairing dialog if a phone is lost.
+- **Optional TLS on the phone listener.** Point the pairing dialog's Transport settings at a PEM
+  cert/key pair and the listener serves HTTPS/WSS instead (`tailscale cert` is the easy path on a
+  tailnet; mkcert with its CA installed on the phone also works). A half-configured pair is
+  rejected rather than silently falling back to plaintext. Self-signed certs encrypt the wire but
+  phone browsers will warn; certs the phone actually trusts give the clean experience.
 - **Per-run token.** The Tauri shell mints a 32-byte token and passes it to the sidecar via
   `CORRAL_TOKEN` (legacy `CODAPP_TOKEN` also honored). Every `/api/*` request must present it
   (constant-time compare). The WebView

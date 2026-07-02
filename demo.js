@@ -261,6 +261,7 @@ async function handleApi(req, res, url) {
   if (url.pathname === '/api/chat/launch' && req.method === 'POST') return json(res, { ok: true, id: 'sess-corral' }), true;
   if (url.pathname === '/api/chat/resume' && req.method === 'POST') return json(res, { ok: true, id: url.searchParams.get('id') || 'sess-corral' }), true;
   if (url.pathname === '/api/chat/kill' && req.method === 'POST') return json(res, { ok: true }), true;
+  if (url.pathname === '/api/chat/interrupt' && req.method === 'POST') return json(res, { ok: true }), true;
   if (url.pathname === '/api/chat/remove' && req.method === 'POST') return json(res, { ok: true }), true;
   if (url.pathname === '/api/chat/label' && req.method === 'POST') return json(res, { ok: true }), true;
   if (url.pathname === '/api/chat/permission' && req.method === 'POST') return json(res, { ok: true }), true;

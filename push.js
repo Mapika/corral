@@ -114,12 +114,12 @@ function notificationExtras({ kind, sessionId, requestId, base, token, actionsEn
 }
 
 // The pairing base the phone can actually reach — first LAN address + remote port, or '' when
-// remote access is disabled.
+// remote access is disabled. Scheme follows the listener's TLS config.
 function remoteBase() {
   const rc = remote.get();
   if (!rc.enabled || !rc.token) return { base: '', token: '' };
   const addr = remote.lanAddresses()[0];
-  return addr ? { base: 'http://' + addr + ':' + rc.port, token: rc.token } : { base: '', token: '' };
+  return addr ? { base: (rc.tls ? 'https' : 'http') + '://' + addr + ':' + rc.port, token: rc.token } : { base: '', token: '' };
 }
 
 // --- delivery ---

@@ -14,7 +14,10 @@ const DATA_DIR = fs.existsSync(path.join(os.homedir(), '.codapp')) && !fs.exists
   : path.join(os.homedir(), '.corral');
 const CONF = path.join(DATA_DIR, 'remote.json');
 
-const DEFAULTS = Object.freeze({ enabled: false, token: '', port: 7879 });
+// certPath/keyPath (PEM) switch the listener to TLS — point them at a cert the phone will trust:
+// `tailscale cert` output, mkcert with the CA installed on the phone, or a real one. Self-signed
+// certs work for transport privacy but browsers will interstitial; see SECURITY.md.
+const DEFAULTS = Object.freeze({ enabled: false, token: '', port: 7879, certPath: '', keyPath: '' });
 
 function load() {
   try {
@@ -36,7 +39,17 @@ function persist() {
 }
 
 function get() {
-  return { ...conf };
+  return { ...conf, tls: !!(conf.certPath && conf.keyPath) };
+}
+
+// Read the PEM pair for the TLS listener. Returns { cert, key } or throws with a path-naming
+// message the settings UI can show verbatim.
+function loadTls(cfg = conf) {
+  const read = (p, what) => {
+    try { return fs.readFileSync(p); }
+    catch (e) { throw new Error('could not read ' + what + ' at ' + p + ': ' + (e.code || e.message)); }
+  };
+  return { cert: read(cfg.certPath, 'certificate'), key: read(cfg.keyPath, 'private key') };
 }
 
 function set(next = {}) {
@@ -45,6 +58,14 @@ function set(next = {}) {
     const p = Math.floor(+next.port);
     if (!(p >= 1024 && p <= 65535)) throw new Error('port must be 1024-65535');
     conf.port = p;
+  }
+  // Both or neither: a half-configured TLS pair must not silently fall back to plaintext.
+  if (next.certPath != null || next.keyPath != null) {
+    const cert = next.certPath != null ? String(next.certPath).trim() : conf.certPath;
+    const key = next.keyPath != null ? String(next.keyPath).trim() : conf.keyPath;
+    if (!!cert !== !!key) throw new Error('set both certificate and key paths (or clear both)');
+    conf.certPath = cert;
+    conf.keyPath = key;
   }
   // The pairing token is minted once, on first enable, and survives restarts so a paired phone
   // stays paired. "Rotate" mints a fresh one (un-pairs every phone).
@@ -100,4 +121,4 @@ function lanAddresses(interfaces = os.networkInterfaces()) {
   });
 }
 
-module.exports = { get, set, isPrivateIp, isPrivateOrigin, isLoopbackAddr, lanAddresses, DEFAULTS };
+module.exports = { get, set, loadTls, isPrivateIp, isPrivateOrigin, isLoopbackAddr, lanAddresses, DEFAULTS };
