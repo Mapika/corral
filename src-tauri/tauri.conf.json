@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Corral",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "io.github.mapika.corral",
   "build": {
     "frontendDist": "../dist",
@@ -17,8 +17,12 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
-    "externalBin": ["binaries/node"],
+    "targets": [
+      "nsis"
+    ],
+    "externalBin": [
+      "binaries/node"
+    ],
     "resources": {
       "../server.js": "server.js",
       "../chat.js": "chat.js",

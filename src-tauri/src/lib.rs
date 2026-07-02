@@ -1,26 +1,51 @@
-// Corral Tauri shell: launches the Node backend as a bundled sidecar on a loopback port with a
-// per-run auth token, then opens the WebView at that loopback URL. In dev, the vite dev server
-// (which auto-starts the backend) is used instead.
+// Corral Tauri shell.
+//
+// Desktop: launches the Node backend as a bundled sidecar on a loopback port with a per-run auth
+// token, then opens the WebView at that loopback URL. In dev, the vite dev server (which
+// auto-starts the backend) is used instead.
+//
+// Mobile (Android/iOS): there is no sidecar — phones can't run the ssh/pty backend. The app ships
+// the frontend in its bundle and pairs with a desktop Corral over the network (QR pairing, see
+// remote.js); the webview loads the bundled pages and the JS layer talks to the paired server.
+#[cfg(desktop)]
 use std::net::{TcpListener, TcpStream};
+#[cfg(desktop)]
 use std::sync::Mutex;
+#[cfg(desktop)]
 use std::time::Duration;
+#[cfg(desktop)]
 use tauri::menu::{Menu, MenuItem};
+#[cfg(desktop)]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+#[cfg(desktop)]
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+#[cfg(desktop)]
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
+#[cfg(desktop)]
 use tauri_plugin_shell::ShellExt;
 
+#[cfg(desktop)]
 struct Sidecar(Mutex<Option<CommandChild>>);
+#[cfg(desktop)]
 struct AppToken(String);
 
 // The WebView fetches this once at boot and attaches it to every backend request.
+// Mobile has no local backend (and no per-run token) — pairing supplies the credential in JS.
+#[cfg(desktop)]
 #[tauri::command]
 fn get_token(token: tauri::State<AppToken>) -> String {
     token.0.clone()
 }
+#[cfg(mobile)]
+#[tauri::command]
+fn get_token() -> String {
+    String::new()
+}
 
 // The dashboard pushes its needs-attention count here; the tray tooltip mirrors it so a glance
-// at the system tray answers "does the herd need me?" without raising the window.
+// at the system tray answers "does the herd need me?" without raising the window. No tray on
+// mobile — the call is accepted and ignored.
+#[cfg(desktop)]
 #[tauri::command]
 fn set_attention(app: tauri::AppHandle, count: u32) {
     if let Some(tray) = app.tray_by_id("main") {
@@ -32,7 +57,11 @@ fn set_attention(app: tauri::AppHandle, count: u32) {
         let _ = tray.set_tooltip(Some(tip));
     }
 }
+#[cfg(mobile)]
+#[tauri::command]
+fn set_attention(_count: u32) {}
 
+#[cfg(desktop)]
 fn show_main(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -41,6 +70,7 @@ fn show_main(app: &tauri::AppHandle) {
     }
 }
 
+#[cfg(desktop)]
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .and_then(|l| l.local_addr())
@@ -48,6 +78,7 @@ fn free_port() -> u16 {
         .unwrap_or(7878)
 }
 
+#[cfg(desktop)]
 fn gen_token() -> String {
     use rand::RngCore;
     let mut b = [0u8; 32];
@@ -57,6 +88,29 @@ fn gen_token() -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(desktop)]
+    run_desktop();
+    #[cfg(mobile)]
+    run_mobile();
+}
+
+// Mobile shell: bundled frontend, notification plugin, nothing else — the paired desktop backend
+// does the real work. The JS layer detects the tauri origin and shows the pairing screen.
+#[cfg(mobile)]
+fn run_mobile() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
+        .invoke_handler(tauri::generate_handler![get_token, set_attention])
+        .setup(|app| {
+            tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default()).build()?;
+            Ok(())
+        })
+        .run(tauri::generate_context!())
+        .expect("error while building tauri application");
+}
+
+#[cfg(desktop)]
+fn run_desktop() {
     let port = free_port();
     let token = gen_token();
 

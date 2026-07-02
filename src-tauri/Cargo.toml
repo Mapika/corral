@@ -1,6 +1,6 @@
 [package]
 name = "corral"
-version = "0.1.0"
+version = "0.2.0"
 description = "Ranch your AI coding agents"
 authors = ["Mark Marosi"]
 license = "MIT"
@@ -21,10 +21,16 @@ tauri-build = { version = "2.6.3", features = [] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2.11.3", features = ["tray-icon", "image-png"] }
+tauri = { version = "2.11.3", features = [] }
 tauri-plugin-log = "2"
-tauri-plugin-shell = "2"
 tauri-plugin-notification = "2"
+
+# Desktop-only: tray, sidecar shell, global shortcut, single instance, token minting. The mobile
+# app is a thin paired client (see lib.rs) and must not pull these in — several don't compile on
+# Android/iOS at all.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri = { version = "2.11.3", features = ["tray-icon", "image-png"] }
+tauri-plugin-shell = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
 rand = "0.8"
