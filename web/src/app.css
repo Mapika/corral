@@ -1,0 +1,38 @@
+/* Base layer — reset, document defaults, and shared utilities (glass, focus, selection, scrollbars).
+   Design tokens live in tokens.css (imported first in main.js); this file only consumes them. */
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: var(--w-reg) 16px/1.5 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "cv05" 1, "ss01" 1;
+}
+
+/* liquid glass — frosted surface + rim highlight. Add class="glass" for the frost; add `use:glass`
+   (lib/glass.js) on top for the live rounded-rim refraction + chromatic aberration. The frost here is
+   the cross-browser floor; the action upgrades it where url() backdrop-filters work (Chromium/WebView2). */
+.glass {
+  position: relative;
+  background: rgba(255, 255, 255, .03);
+  backdrop-filter: blur(4px) saturate(1.3);
+  -webkit-backdrop-filter: blur(4px) saturate(1.3);
+  border: 1px solid rgba(255, 255, 255, .2);
+  /* directional specular: a bright pool on the top-left rim + faint bottom-right = light from above-left */
+  box-shadow:
+    inset 2px 3px 5px -2px rgba(255, 255, 255, .7),
+    inset -2px -3px 6px -3px rgba(255, 255, 255, .22),
+    inset 0 0 0 1px rgba(255, 255, 255, .08),
+    0 14px 40px rgba(0, 0, 0, .5);
+}
+
+:focus-visible { outline: 1.5px solid var(--text); outline-offset: 2px; }
+::selection { background: var(--text); color: var(--bg); }
+
+* { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.16) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,.14); border: 3px solid transparent; background-clip: content-box; border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.26); border: 3px solid transparent; background-clip: content-box; }

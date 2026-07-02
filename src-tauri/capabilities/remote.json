@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "remote-window-controls",
+  "description": "Window controls (minimize/maximize/close/drag) for the custom titlebar on the loopback UI origin. Scoped to window controls only — no fs/shell/http IPC is granted to the remote page.",
+  "remote": { "urls": ["http://127.0.0.1:*", "http://localhost:*"] },
+  "windows": ["main"],
+  "permissions": [
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-is-maximized",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging",
+    "notification:default"
+  ]
+}

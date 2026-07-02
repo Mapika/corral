@@ -1,0 +1,65 @@
+name: release
+
+# Tag a version (git tag v0.1.0 && git push --tags) and this builds desktop bundles for
+# macOS (Apple silicon + Intel), Windows, and Linux, attached to a draft GitHub release.
+# Builds are unsigned: macOS users right-click > Open past Gatekeeper the first time,
+# Windows users click through SmartScreen. Signing can be added later without restructuring.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest        # Apple silicon
+            bundles: dmg
+          - platform: macos-13            # Intel
+            bundles: dmg
+          - platform: ubuntu-22.04
+            bundles: appimage,deb
+          - platform: windows-latest
+            bundles: nsis
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Linux system deps (webkit, tray, appimage tooling)
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
+
+      - run: npm ci
+
+      - name: Stage Node sidecar for this target
+        run: node scripts/prepare-sidecar.mjs
+
+      - run: npm test
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Corral ${{ github.ref_name }}'
+          releaseBody: 'Unsigned builds — macOS: right-click the app and choose Open the first time. Windows: SmartScreen → More info → Run anyway.'
+          releaseDraft: true
+          args: --bundles ${{ matrix.bundles }}

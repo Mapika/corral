@@ -1,0 +1,38 @@
+/* Assistant prose, injected via {@html} — global (Svelte's scoped styles can't reach it).
+   Reads as an editorial column in Inter on the dark canvas; code blocks are pure-black immersive
+   insets. Highlighting is MONOCHROME — token roles carried by weight + italic + grey-step, never
+   hue — holding the achromatic system all the way into the code. */
+.prose { font-family: var(--sans); font-size: 16px; font-weight: var(--w-reg); line-height: 1.62; color: var(--text); }
+.prose > :first-child { margin-top: 0; }
+.prose > :last-child { margin-bottom: 0; }
+.prose p { margin: 0 0 .8em; }
+.prose h1, .prose h2, .prose h3 { font-weight: var(--w-light); line-height: 1.15; margin: 1.2em 0 .5em; color: var(--paper); letter-spacing: -.01em; }
+.prose h1 { font-size: 1.7em; } .prose h2 { font-size: 1.38em; } .prose h3 { font-size: 1.14em; font-weight: var(--w-reg); }
+.prose ul, .prose ol { margin: .3em 0 .9em; padding-left: 1.3em; }
+.prose li { margin: .2em 0; }
+.prose a { color: var(--paper); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.prose strong { font-weight: var(--w-semi); color: var(--paper); }
+.prose em { font-style: italic; }
+.prose blockquote { margin: .7em 0; padding-left: 16px; border-left: 2px solid var(--text-faint); color: var(--text-dim); }
+.prose hr { border: 0; border-top: 1px solid var(--hair); margin: 1.3em 0; }
+.prose code { font-family: var(--mono); font-size: .84em; background: var(--surface-2); padding: .1em .4em; }
+.prose pre { background: var(--frame); padding: 16px 18px; overflow: auto; margin: .8em 0; }
+.prose pre code { background: none; padding: 0; font-size: 12.5px; line-height: 1.6; color: #e2e2e2; }
+.prose table { border-collapse: collapse; margin: .7em 0; font-size: .9em; }
+.prose th, .prose td { border: 1px solid var(--seam); padding: 6px 11px; text-align: left; }
+.prose th { font-weight: var(--w-semi); }
+
+/* monochrome code palette — global, shared by chat prose and the file previewer */
+.hljs { color: #e2e2e2; }
+.hljs-comment, .hljs-quote { color: #7c7a75; font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-section, .hljs-doctag { color: #ffffff; font-weight: 600; }
+.hljs-built_in, .hljs-type, .hljs-class .hljs-title { color: #cfcfcf; font-weight: 600; }
+.hljs-string, .hljs-attr, .hljs-regexp, .hljs-meta-string { color: #aeaca6; }
+.hljs-number, .hljs-variable, .hljs-template-variable { color: #d2d2d2; }
+.hljs-title, .hljs-name, .hljs-selector-id, .hljs-selector-class { color: #ffffff; }
+.hljs-tag, .hljs-attribute { color: #bfbdb7; }
+.hljs-meta, .hljs-symbol, .hljs-bullet { color: #88857f; }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 700; }
+.hljs-addition { color: #ffffff; }
+.hljs-deletion { color: #88857f; text-decoration: line-through; }

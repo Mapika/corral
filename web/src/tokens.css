@@ -1,0 +1,40 @@
+/* Design tokens — the single runtime source of truth for the whole UI.
+   The "Ink" direction (2026-07, see DESIGN.md): the monopo saigon brief remapped to an ALL-DARK
+   editorial console and sharpened — near-black canvas, flush single-surface layout separated by
+   faint seams and whitespace, extreme type scale (thin oversized numerals, tiny wide-tracked caps
+   labels), zero shadows. Achromatic by discipline: mercury is now a metallic silver flow reserved
+   strictly for whatever is ALIVE (a running agent), and one alert orange-red appears only as dots
+   and small text. Role tokens (--bg, --surface, --text, --s1..--s7, --pill) drive every surface;
+   raw palette swatches are kept above them so the mapping stays legible. */
+:root {
+  /* raw monopo palette */
+  --paper: #ffffff; --ink: #000000; --carbon: #181818;
+  --ash: #6d6d6d; --smoke: #9a9a9a; --pewter: #808080; --graphite: #636363;
+  --mercury: #cfd4dc;
+  --mercury-flow: linear-gradient(110deg, #8b919c 0%, #e8ebf0 55%, #79808c 100%);
+
+  /* dark theme roles */
+  --bg: #070708;          /* base canvas */
+  --surface: #121214;     /* raised: sidebar, composer, inputs, row hover on flush ground */
+  --surface-2: #1b1b1f;   /* hover / active / nested */
+  --frame: #000000;       /* deepest immersive insets: code, terminal output */
+  --text: #f3f2ef;        /* primary */
+  --text-dim: #a3a19b;    /* secondary metadata */
+  --text-faint: #6f6d68;  /* tertiary, disabled, hairline-strong */
+  --alert: #ff5a36;       /* the one warm signal — error/attention dots and small text only */
+  --hair: transparent;          /* structural panel outlines retired — separate by surface tone + space */
+  --hair-2: rgba(255,255,255,.15); /* retired — kept only for stragglers; use --seam for internal seams */
+  --seam: rgba(255,255,255,.08);   /* faint internal seam — list-row separators & section rules only, never a panel outline */
+  --chip: rgba(255,255,255,.05);   /* resting fill for borderless controls */
+  --chip-hi: rgba(255,255,255,.1); /* hover / active fill for borderless controls */
+
+  /* type — one geometric sans (Roobert -> Inter) across every role, plus a mono for code/paths */
+  --sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+  --w-thin: 200; --w-light: 300; --w-reg: 400; --w-med: 500; --w-semi: 600;
+
+  --pill: 75px;           /* the only curved element — actions & tags; everything else is 0px */
+
+  /* spacing rhythm (monopo scale, 4px base) — one vocabulary for every gap & pad */
+  --s1: 8px; --s2: 12px; --s3: 16px; --s4: 22px; --s5: 28px; --s6: 40px; --s7: 64px;
+}

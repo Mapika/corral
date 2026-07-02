@@ -1,0 +1,14 @@
+node_modules/
+.playwright-mcp/
+servers.json
+tunnels.json
+*.log
+src-tauri/target/
+dist/
+.DS_Store
+Thumbs.db
+/*.png
+
+# tauri
+src-tauri/binaries/
+src-tauri/gen/
