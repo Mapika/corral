@@ -33,5 +33,12 @@ async function boot() {
     try { const { invoke } = await import('@tauri-apps/api/core'); setToken(await invoke('get_token')); } catch (e) {}
   }
   mount(Root, { target: document.getElementById('app'), props: { standalone, paired } });
+
+  // Offline shell for browser pages (the mobile shell ships its own bundle, dev wants fresh
+  // modules). serviceWorker only exists in secure contexts, so plain-http LAN pairing opts out
+  // by itself; the TLS-paired phone and the desktop's loopback page get cache + last-herd offline.
+  if (import.meta.env.PROD && !standalone && 'serviceWorker' in navigator) {
+    try { navigator.serviceWorker.register('/sw.js'); } catch (e) {}
+  }
 }
 boot();

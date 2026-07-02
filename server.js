@@ -1158,7 +1158,7 @@ const handleRequest = async (req, res) => {
   const rel = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
   const fp = path.join(WEBROOT, rel);
   if (!insideDir(WEBROOT, fp)) { res.statusCode = 403; return res.end(); }
-  const CT = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ico': 'image/x-icon', '.png': 'image/png', '.map': 'application/json' };
+  const CT = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ico': 'image/x-icon', '.png': 'image/png', '.map': 'application/json' };
   fs.readFile(fp, (err, buf) => {
     if (err) {
       // SPA fallback: an unknown path with no file extension serves index.html
