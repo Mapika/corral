@@ -9,7 +9,8 @@
     "test": "node scripts/run-tests.mjs",
     "build": "vite build",
     "preview": "vite preview",
-    "selftest": "node server.js selftest"
+    "selftest": "node server.js selftest",
+    "tauri": "tauri"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
