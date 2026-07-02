@@ -40,6 +40,7 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          shared-key: tauri-${{ matrix.platform }}   # restored from the ci rust-warm job on main
 
       - name: Linux system deps (webkit, tray, appimage tooling)
         if: startsWith(matrix.platform, 'ubuntu')
@@ -93,6 +94,17 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          shared-key: tauri-android
+
+      # Gradle distribution + AGP dependencies (~1-2 min otherwise). Keyed coarsely — the
+      # dependency set only changes when the tauri CLI (which generates the project) does.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: gradle-${{ runner.os }}-
 
       - run: npm ci
 

@@ -17,3 +17,38 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+
+  # Warm the Rust caches for the release matrix. Actions cache scoping only lets a run restore
+  # caches from its own ref or the default branch — release runs live on tag refs, so without
+  # this every release recompiles Tauri cold on all platforms (~15-20 min each). Free on a
+  # public repo; pushes to main keep the caches fresh.
+  rust-warm:
+    if: github.event_name == 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          # Must match the release jobs' shared-key — rust-cache otherwise keys by job name and
+          # the release run would never find this cache.
+          shared-key: tauri-${{ matrix.os }}
+      - name: Linux system deps (webkit, tray)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libssl-dev
+      - run: npm ci
+      - run: npm run build          # tauri-build wants frontendDist (../dist) to exist
+      - name: cargo build --release (release profile is what tauri-action compiles)
+        working-directory: src-tauri
+        run: cargo build --release --locked
