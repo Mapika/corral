@@ -44,6 +44,7 @@ function sessions() {
       tokIn: 18200,
       tokOut: 4200,
       costUsd: 0.38,
+      pendingPerm: { count: 1, id: 'perm-readme', tool: 'Edit', summary: 'README.md' },   // mirrors the chat stream's ask
     },
     {
       id: 'sess-feed',
@@ -262,6 +263,8 @@ async function handleApi(req, res, url) {
   if (url.pathname === '/api/chat/kill' && req.method === 'POST') return json(res, { ok: true }), true;
   if (url.pathname === '/api/chat/remove' && req.method === 'POST') return json(res, { ok: true }), true;
   if (url.pathname === '/api/chat/label' && req.method === 'POST') return json(res, { ok: true }), true;
+  if (url.pathname === '/api/chat/permission' && req.method === 'POST') return json(res, { ok: true }), true;
+  if (url.pathname === '/api/remote') return json(res, { ok: true, enabled: true, port: 7879, running: true, error: '', addresses: ['192.168.1.20'], token: 'demo0token0demo0token0demo0token0demo0token0demo0token0demo0abcd' }), true;
   if (url.pathname === '/api/history/search') return json(res, { hits: [] }), true;
   if (url.pathname === '/api/push') return json(res, { enabled: false, server: 'https://ntfy.sh', topic: '', events: { input: true, done: true, fail: true } }), true;
   if (url.pathname === '/api/push/test' && req.method === 'POST') return json(res, { ok: true }), true;

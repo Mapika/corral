@@ -10,6 +10,7 @@ const crypto = require('crypto');
 const chat = require('./chat');
 const tunnels = require('./tunnels');
 const pushCfg = require('./push');
+const remoteCfg = require('./remote');
 const demo = process.env.CORRAL_DEMO === '1' ? require('./demo') : null;
 
 const SELFTEST = process.argv[2] === 'selftest';
@@ -29,6 +30,22 @@ function eqTok(provided, expected) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 const tokenEq = provided => eqTok(provided, TOKEN);
+// Who may use which token (pure -> selftested): loopback callers use the per-run desktop token
+// (dev-permissive when none is set); anything arriving over the LAN listener must present the
+// durable pairing token — ALWAYS, even in tokenless dev, and never the per-run token (it's in
+// the desktop webview's URL history).
+function tokenVerdict({ provided, loopback, runToken, remote }) {
+  if (loopback) return eqTok(provided, runToken);
+  return !!(remote && remote.enabled && remote.token) && eqTok(provided, remote.token);
+}
+const reqTokenOk = (req, provided) => tokenVerdict({
+  provided,
+  loopback: remoteCfg.isLoopbackAddr(req.socket && req.socket.remoteAddress),
+  runToken: TOKEN,
+  remote: remoteCfg.get(),
+});
+// Does a fresh socket need a first-frame auth before it may do anything? (WS handlers)
+const needsAuth = req => (remoteCfg.isLoopbackAddr(req.socket && req.socket.remoteAddress) ? !!TOKEN : true);
 const bearer = req => { const h = req.headers['authorization'] || ''; return h.startsWith('Bearer ') ? h.slice(7) : ''; };
 // Token lookup order: dedicated header, Authorization: Bearer, then ?tk= — the query form stays
 // because plain <a href> downloads and WS URLs can't set headers.
@@ -38,7 +55,10 @@ const reqToken = (req, url) => req.headers['x-corral-token'] || req.headers['x-c
 // loopback Origin — the browser sets it from the page's real origin — so DNS-rebinding stays
 // blocked. An absent Origin (native / same-process) is allowed but still token-gated.
 const LOOPBACK_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
-const originAllowed = origin => !origin || ORIGINS.has(origin) || LOOPBACK_ORIGIN.test(origin);
+// With remote access enabled, a page served to the phone (private-network origin) is allowed too;
+// public origins stay blocked, so DNS rebinding from the internet still can't reach us.
+const originAllowed = origin => !origin || ORIGINS.has(origin) || LOOPBACK_ORIGIN.test(origin)
+  || (remoteCfg.get().enabled && remoteCfg.isPrivateOrigin(origin));
 // Reject path traversal / NUL / control chars; only absolute or ~-rooted remote paths are valid.
 function validRemotePath(p) {
   if (typeof p !== 'string' || !p || p.includes('\0') || /[\x00-\x1f]/.test(p)) return false;
@@ -141,7 +161,9 @@ function insideDir(root, target) {
 // CSP for the served HTML (applies when the Node server serves it — packaged app / `npm start`).
 // script-src is strict 'self' (Vite bundles every dep locally); the only off-origin asset is the
 // Google font. style 'unsafe-inline' is needed for the inline styles in sanitized/streamed HTML.
-const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:*; frame-src 'self'; object-src 'none'; base-uri 'self'";
+// connect-src allows any ws(s) host: the page may be served from a LAN address (phone pairing),
+// so the socket host can't be pinned to loopback. Fetches stay 'self'.
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' ws: wss:; frame-src 'self'; object-src 'none'; base-uri 'self'";
 
 // --- pooled remote exec: one persistent `ssh <host> bash` per host, so file browsing, probes,
 // and file ops pay the ssh handshake once instead of per request. Jobs are serialized per host;
@@ -715,6 +737,52 @@ if (SELFTEST) {
   a.equal(chat.list().find(s => s.id === 'selftest-plain').label, null);     // unlabeled defaults
   a.equal(chat.list().find(s => s.id === 'selftest-plain').worktree, false);
   chat._sessions.delete('selftest-label'); chat._sessions.delete('selftest-plain');
+  // pending permission prompts surface on the roster: { count, latest ask's tool + summary } or null
+  a.equal(chat.permSummary({ command: 'npm test' }), 'npm test');
+  a.equal(chat.permSummary({ file_path: '/etc/hosts' }), '/etc/hosts');
+  a.equal(chat.permSummary({ command: 'x'.repeat(400) }).length, 120);       // capped for the roster
+  a.equal(chat.permSummary({ weird: 1 }), '');                               // unknown shapes stay quiet
+  a.equal(chat.permSummary(null), '');
+  chat._sessions.set('selftest-perm', { id: 'selftest-perm', host: 'local', cwd: '/tmp', model: null, status: 'busy', sessionId: 'sidQ', createdAt: 1, updatedAt: 2, pendingPerms: new Map([['r1', { tool: 'Bash', summary: 'rm -rf build' }], ['r2', { tool: 'Edit', summary: 'README.md' }]]), events: [], subs: new Set() });
+  a.deepEqual(chat.list().find(s => s.id === 'selftest-perm').pendingPerm, { count: 2, id: 'r2', tool: 'Edit', summary: 'README.md' });
+  chat._sessions.get('selftest-perm').pendingPerms = null;
+  a.equal(chat.list().find(s => s.id === 'selftest-perm').pendingPerm, null);
+  chat._sessions.delete('selftest-perm');
+  // remote access (phone pairing): pure classification helpers
+  a.equal(remoteCfg.isPrivateIp('192.168.1.20'), true);
+  a.equal(remoteCfg.isPrivateIp('10.0.0.7'), true);
+  a.equal(remoteCfg.isPrivateIp('172.16.0.1'), true);
+  a.equal(remoteCfg.isPrivateIp('172.32.0.1'), false);              // just past the RFC1918 172 range
+  a.equal(remoteCfg.isPrivateIp('100.100.1.9'), true);              // Tailscale CGNAT
+  a.equal(remoteCfg.isPrivateIp('100.63.0.1'), false);
+  a.equal(remoteCfg.isPrivateIp('8.8.8.8'), false);
+  a.equal(remoteCfg.isPrivateIp('192.168.1.999'), false);
+  a.equal(remoteCfg.isPrivateIp('evil.com'), false);
+  a.equal(remoteCfg.isPrivateOrigin('http://192.168.1.20:7879'), true);
+  a.equal(remoteCfg.isPrivateOrigin('https://100.101.1.2'), true);
+  a.equal(remoteCfg.isPrivateOrigin('http://evil.com'), false);
+  a.equal(remoteCfg.isPrivateOrigin('http://8.8.8.8:7879'), false);
+  a.equal(remoteCfg.isPrivateOrigin('ftp://192.168.1.20'), false);
+  a.equal(remoteCfg.isPrivateOrigin(''), false);
+  a.equal(remoteCfg.isLoopbackAddr('127.0.0.1'), true);
+  a.equal(remoteCfg.isLoopbackAddr('::1'), true);
+  a.equal(remoteCfg.isLoopbackAddr('::ffff:127.0.0.1'), true);
+  a.equal(remoteCfg.isLoopbackAddr('192.168.1.5'), false);
+  a.equal(remoteCfg.isLoopbackAddr(undefined), false);
+  a.deepEqual(remoteCfg.lanAddresses({
+    lo: [{ family: 'IPv4', address: '127.0.0.1', internal: true }],
+    eth0: [{ family: 'IPv4', address: '10.1.2.3', internal: false }, { family: 'IPv6', address: 'fe80::1', internal: false }],
+    wifi: [{ family: 4, address: '192.168.1.5', internal: false }],   // numeric family (older node)
+    wan: [{ family: 'IPv4', address: '203.0.113.9', internal: false }],
+  }), ['192.168.1.5', '10.1.2.3']);                                  // public + internal filtered, 192.168 first
+  // token verdicts: loopback keeps the per-run rules; LAN callers need the pairing token, always
+  a.equal(tokenVerdict({ provided: 'x', loopback: true, runToken: '', remote: { enabled: true, token: 'r' } }), true);     // dev loopback stays permissive
+  a.equal(tokenVerdict({ provided: 'run', loopback: true, runToken: 'run', remote: { enabled: false, token: '' } }), true);
+  a.equal(tokenVerdict({ provided: 'r', loopback: false, runToken: '', remote: { enabled: true, token: 'r' } }), true);
+  a.equal(tokenVerdict({ provided: 'run', loopback: false, runToken: 'run', remote: { enabled: true, token: 'r' } }), false);  // per-run token is loopback-only
+  a.equal(tokenVerdict({ provided: '', loopback: false, runToken: '', remote: { enabled: true, token: 'r' } }), false);        // no dev-permissive LAN
+  a.equal(tokenVerdict({ provided: 'r', loopback: false, runToken: '', remote: { enabled: false, token: 'r' } }), false);      // disabled = closed
+  a.equal(tokenVerdict({ provided: 'r', loopback: false, runToken: '', remote: { enabled: true, token: '' } }), false);        // no token minted yet = closed
   // push messages: pure builder (no config read, nothing sent)
   {
     const s = { agent: 'claude', host: 'gpu1', cwd: '/srv/app' };
@@ -727,6 +795,15 @@ if (SELFTEST) {
     a.equal(done.body, 'app finished its turn ($1.50 total)');   // local host omitted
     a.equal(pushCfg.messageFor('fail-error', s, { detail: 'boom' }).title, 'Session error');
     a.equal(pushCfg.messageFor('fail', s).title, 'Session ended');
+    // notification extras: click deep-link + optional one-tap permission actions (pure)
+    const nx = pushCfg.notificationExtras({ kind: 'input', sessionId: 'ses 1', requestId: 'req_1', base: 'http://192.168.1.20:7879', token: 'tok', actionsEnabled: true });
+    a.equal(nx.click, 'http://192.168.1.20:7879/#session=ses%201');
+    a.ok(nx.actions.startsWith('http, Allow, http://192.168.1.20:7879/api/chat/permission?id=ses%201&requestId=req_1&decision=allow'));
+    a.ok(nx.actions.includes('; http, Deny, ') && nx.actions.includes('decision=deny'));
+    a.ok(nx.actions.includes('headers.x-corral-token=tok'));
+    a.equal(pushCfg.notificationExtras({ kind: 'input', sessionId: 's', requestId: 'r', base: 'http://10.0.0.2:7879', token: 'tok', actionsEnabled: false }).actions, undefined);   // opt-in
+    a.equal(pushCfg.notificationExtras({ kind: 'done', sessionId: 's', base: 'http://10.0.0.2:7879', token: 'tok', actionsEnabled: true }).actions, undefined);   // actions only on asks
+    a.deepEqual(pushCfg.notificationExtras({ kind: 'input', sessionId: 's', requestId: 'r', base: '', token: 'tok', actionsEnabled: true }), {});   // remote off => no dead links
   }
   console.log('selftest ok'); process.exit(0);
   })().catch(e => { console.error(e); process.exit(1); });
@@ -741,7 +818,9 @@ if (!demo) chat.loadRoster();   // re-hydrate past sessions (dormant) so they ca
 process.on('uncaughtException', (e) => console.error('[uncaught]', (e && e.stack) || e));
 process.on('unhandledRejection', (e) => console.error('[unhandledRejection]', (e && e.stack) || e));
 
-const server = http.createServer(async (req, res) => {
+// The one request handler — served on the loopback listener always, and on the LAN listener too
+// while remote access (phone pairing) is enabled.
+const handleRequest = async (req, res) => {
   const url = new URL(req.url, 'http://x');
   // --- auth gate for all /api/* routes (loopback bind + token + Origin allowlist) ---
   if (url.pathname.startsWith('/api/')) {
@@ -754,7 +833,32 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'OPTIONS') { res.statusCode = 204; return res.end(); }
     if (!originAllowed(origin)) { res.statusCode = 403; return res.end('bad origin'); }
-    if (!tokenEq(reqToken(req, url))) { res.statusCode = 401; return res.end('unauthorized'); }
+    if (!reqTokenOk(req, reqToken(req, url))) { res.statusCode = 401; return res.end('unauthorized'); }
+  }
+  // --- remote access (phone pairing) ---
+  if (url.pathname === '/api/remote') {
+    res.setHeader('content-type', 'application/json');
+    const loopback = remoteCfg.isLoopbackAddr(req.socket && req.socket.remoteAddress);
+    if (req.method === 'POST') {
+      try {
+        const q = url.searchParams;
+        if (!loopback) { res.statusCode = 403; return res.end(JSON.stringify({ ok: false, error: 'remote settings are loopback-only' })); }
+        const next = {};
+        if (q.has('enabled')) next.enabled = q.get('enabled') === '1';
+        if (q.has('port')) next.port = q.get('port');
+        if (q.get('rotate') === '1') next.rotate = true;
+        remoteCfg.set(next);
+        syncRemoteListener();
+      } catch (e) {
+        res.statusCode = 400; return res.end(JSON.stringify({ ok: false, error: String(e.message || e) }));
+      }
+    }
+    const cfg = remoteCfg.get();
+    const out = { ok: true, enabled: cfg.enabled, port: cfg.port, running: !!(remoteSrv && remoteSrv.listening), error: remoteErr };
+    // The pairing secret and addresses only ever go to the desktop shell (loopback) — a remote
+    // caller already knows its own address and must not be able to read the token back.
+    if (loopback) { out.addresses = remoteCfg.lanAddresses(); out.token = cfg.token; }
+    return res.end(JSON.stringify(out));
   }
   if (demo && await demo.handleApi(req, res, url)) return;
   if (url.pathname === '/api/servers') {
@@ -973,6 +1077,14 @@ const server = http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ ok: false, error: String(e.message || e) }));
     }
   }
+  // answer a pending permission prompt over plain HTTP — the phone's herd view responds in one
+  // tap using the requestId surfaced on the roster (list().pendingPerm.id), no chat socket needed
+  if (url.pathname === '/api/chat/permission' && req.method === 'POST') {
+    const ok = chat.respondPermission(url.searchParams.get('id'), String(url.searchParams.get('requestId') || ''), url.searchParams.get('decision'));
+    res.setHeader('content-type', 'application/json');
+    if (!ok) { res.statusCode = 400; return res.end(JSON.stringify({ ok: false, error: 'unknown session/request or bad decision' })); }
+    return res.end(JSON.stringify({ ok: true }));
+  }
   // operator display label on a roster session — trimmed/capped in chat.setLabel, empty clears
   if (url.pathname === '/api/chat/label' && req.method === 'POST') {
     const ok = chat.setLabel(url.searchParams.get('id'), url.searchParams.get('label') || '');
@@ -988,7 +1100,7 @@ const server = http.createServer(async (req, res) => {
       try {
         const q = url.searchParams;
         const next = {};
-        for (const k of ['enabled', 'input', 'done', 'fail']) if (q.has(k)) next[k] = q.get(k) === '1';
+        for (const k of ['enabled', 'actions', 'input', 'done', 'fail']) if (q.has(k)) next[k] = q.get(k) === '1';
         if (q.has('server')) next.server = q.get('server');
         if (q.has('topic')) next.topic = q.get('topic');
         return res.end(JSON.stringify({ ok: true, config: pushCfg.set(next) }));
@@ -1028,6 +1140,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'DELETE') { tunnels.remove(url.searchParams.get('id')); res.setHeader('content-type', 'application/json'); return res.end(JSON.stringify({ ok: true })); }
   }
+  // An /api path nothing above handled must NOT fall through to the SPA fallback — serving HTML
+  // to an API client turns a version mismatch into a cryptic JSON.parse error in the UI.
+  if (url.pathname.startsWith('/api/')) return jsonError(res, 404, 'unknown API route: ' + url.pathname);
   const rel = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
   const fp = path.join(WEBROOT, rel);
   if (!insideDir(WEBROOT, fp)) { res.statusCode = 403; return res.end(); }
@@ -1047,21 +1162,47 @@ const server = http.createServer(async (req, res) => {
     if (ct === 'text/html') res.setHeader('content-security-policy', CSP);
     res.end(buf);
   });
-});
+};
+const server = http.createServer(handleRequest);
 
 // WebSocket upgrade routing: /ws = tmux terminal bridge, /chat = local Claude stream-json chat,
 // /events = server-push channel (session roster + tunnel snapshots).
 const wss = new WebSocketServer({ noServer: true });
 const chatWss = new WebSocketServer({ noServer: true });
 const eventsWss = new WebSocketServer({ noServer: true });
-server.on('upgrade', (req, socket, head) => {
+const handleUpgrade = (req, socket, head) => {
   const { pathname } = new URL(req.url, 'http://x');
   if (!originAllowed(req.headers.origin)) return socket.destroy();
   if (pathname === '/ws') wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req));
   else if (pathname === '/chat') chatWss.handleUpgrade(req, socket, head, ws => chatWss.emit('connection', ws, req));
   else if (pathname === '/events') eventsWss.handleUpgrade(req, socket, head, ws => eventsWss.emit('connection', ws, req));
   else socket.destroy();
-});
+};
+server.on('upgrade', handleUpgrade);
+
+// --- LAN listener for remote access (phone pairing) — opt-in, stopped again on disable ---
+let remoteSrv = null, remoteErr = '';
+function syncRemoteListener() {
+  const cfg = remoteCfg.get();
+  if (cfg.enabled && !remoteSrv) {
+    remoteErr = '';
+    const srv = http.createServer(handleRequest);
+    srv.on('upgrade', handleUpgrade);
+    srv.on('error', e => {
+      remoteErr = e && e.code === 'EADDRINUSE' ? `port ${cfg.port} is already in use` : String((e && e.message) || e);
+      console.error('[remote] listener error:', remoteErr);
+      try { srv.close(); } catch (x) {}
+      if (remoteSrv === srv) remoteSrv = null;
+    });
+    remoteSrv = srv;
+    srv.listen(cfg.port, '0.0.0.0', () => console.log(`corral remote access on 0.0.0.0:${cfg.port}`));
+  } else if (!cfg.enabled && remoteSrv) {
+    const srv = remoteSrv;
+    remoteSrv = null;
+    try { srv.close(); } catch (e) {}
+    console.log('corral remote access stopped');
+  }
+}
 
 // /events: push a fresh snapshot whenever anything changes (debounced), so the UI can stop
 // polling sessions/tunnels while connected. Hosts stay poll-based — their probes are expensive.
@@ -1078,9 +1219,9 @@ const debouncedPush = (make, ms = 200) => {
 };
 chat.onAnyChange(debouncedPush(() => ({ type: 'sessions', sessions: chat.list() })));
 tunnels.onChange(debouncedPush(() => ({ type: 'tunnels', tunnels: tunnels.list() })));
-eventsWss.on('connection', (ws) => {
+eventsWss.on('connection', (ws, req) => {
   if (demo) return demo.handleEvents(ws);
-  let authed = !TOKEN;
+  let authed = !needsAuth(req);
   const doSub = () => {
     eventsClients.add(ws);
     if (ws.readyState !== 1) return;
@@ -1088,11 +1229,11 @@ eventsWss.on('connection', (ws) => {
     ws.send(JSON.stringify({ type: 'tunnels', tunnels: tunnels.list() }));
   };
   if (authed) doSub();
-  const authTimer = TOKEN ? setTimeout(() => { if (!authed) ws.close(); }, 5000) : null;
+  const authTimer = !authed ? setTimeout(() => { if (!authed) ws.close(); }, 5000) : null;
   ws.on('message', m => {
     let msg; try { msg = JSON.parse(m); } catch { return; }
     if (!authed) {
-      if (msg.type === 'auth' && tokenEq(msg.token)) { authed = true; clearTimeout(authTimer); doSub(); }
+      if (msg.type === 'auth' && reqTokenOk(req, msg.token)) { authed = true; clearTimeout(authTimer); doSub(); }
       else ws.close();
     }
   });
@@ -1105,14 +1246,14 @@ chatWss.on('connection', (ws, req) => {
   if (demo) return demo.handleChat(ws, req);
   const url = new URL(req.url, 'http://x');
   const id = url.searchParams.get('id');
-  let authed = !TOKEN, attached = false;
+  let authed = !needsAuth(req), attached = false;
   const doAttach = () => { if (attached) return; attached = true; if (!chat.attach(id, ws)) ws.close(); };
   if (authed) doAttach();
-  const authTimer = TOKEN ? setTimeout(() => { if (!attached) ws.close(); }, 5000) : null;
+  const authTimer = !authed ? setTimeout(() => { if (!attached) ws.close(); }, 5000) : null;
   ws.on('message', m => {
     let msg; try { msg = JSON.parse(m); } catch { return; }
     if (!authed) {
-      if (msg.type === 'auth' && tokenEq(msg.token)) { authed = true; clearTimeout(authTimer); doAttach(); }
+      if (msg.type === 'auth' && reqTokenOk(req, msg.token)) { authed = true; clearTimeout(authTimer); doAttach(); }
       else ws.close();
       return;
     }
@@ -1145,14 +1286,15 @@ wss.on('connection', (ws, req) => {
     p.onData(d => ws.readyState === 1 && ws.send(d));
     p.onExit(() => ws.close());
   };
-  // When a token is required, the socket must prove it with a first {type:'auth',token} frame
-  // BEFORE any pty is spawned; otherwise (dev / no token) we attach immediately.
-  const authTimer = TOKEN ? setTimeout(() => { if (!p) ws.close(); }, 5000) : null;
-  if (!TOKEN) start();
+  // When auth is required (token set, or any non-loopback socket), the socket must prove it with
+  // a first {type:'auth',token} frame BEFORE any pty is spawned; otherwise we attach immediately.
+  const mustAuth = needsAuth(req);
+  const authTimer = mustAuth ? setTimeout(() => { if (!p) ws.close(); }, 5000) : null;
+  if (!mustAuth) start();
   ws.on('message', m => {
     let msg; try { msg = JSON.parse(m); } catch { return; }
     if (!p) {                                   // not yet authed -> only an auth frame is accepted
-      if (msg.type === 'auth' && tokenEq(msg.token)) { clearTimeout(authTimer); start(); }
+      if (msg.type === 'auth' && reqTokenOk(req, msg.token)) { clearTimeout(authTimer); start(); }
       else ws.close();
       return;
     }
@@ -1165,6 +1307,7 @@ wss.on('connection', (ws, req) => {
 const PORT = process.env.PORT || 7878;
 const BIND = process.env.CORRAL_BIND || process.env.CODAPP_BIND || '127.0.0.1';   // loopback only; never 0.0.0.0
 if (!demo) tunnels.restorePersisted();                   // reap orphaned ssh forwards, then bring last run's tunnels back up
+syncRemoteListener();                                    // phone pairing left enabled last run comes back up with it
 // Kill every child (agent sessions + ssh forwards) and flush the roster on the way out. The
 // 'exit' hook covers any path that actually brings the process down — including a fatal throw —
 // while the uncaughtException handler above deliberately keeps the sidecar alive.

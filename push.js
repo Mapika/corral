@@ -6,6 +6,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const remote = require('./remote');
 
 // Same fallback rule as chat.js: an existing pre-rename ~/.codapp keeps being used.
 const DATA_DIR = fs.existsSync(path.join(os.homedir(), '.codapp')) && !fs.existsSync(path.join(os.homedir(), '.corral'))
@@ -17,6 +18,9 @@ const DEFAULTS = Object.freeze({
   enabled: false,
   server: 'https://ntfy.sh',
   topic: '',
+  // One-tap Allow/Deny buttons on permission notifications. Opt-in: the action URLs must embed
+  // the phone-pairing token, so anyone who can read the ntfy topic could answer prompts.
+  actions: false,
   events: Object.freeze({ input: true, done: true, fail: true }),
 });
 
@@ -35,7 +39,7 @@ function get() {
   const server = process.env.CORRAL_NTFY_SERVER || conf.server;
   const topic = process.env.CORRAL_NTFY_TOPIC || conf.topic;
   const enabled = process.env.CORRAL_NTFY_TOPIC ? true : conf.enabled;
-  return { enabled, server, topic, events: { ...conf.events } };
+  return { enabled, server, topic, actions: !!conf.actions, events: { ...conf.events } };
 }
 
 const SAFE_TOPIC = /^[A-Za-z0-9_-]{1,64}$/;
@@ -52,6 +56,7 @@ function set(next = {}) {
     if (topic && !SAFE_TOPIC.test(topic)) throw new Error('topic: letters, digits, - and _ only (max 64)');
     merged.topic = topic;
   }
+  if (next.actions != null) merged.actions = !!next.actions;
   for (const k of Object.keys(DEFAULTS.events)) if (next[k] != null) merged.events[k] = !!next[k];
   conf = merged;
   try {
@@ -91,17 +96,46 @@ function messageFor(kind, s = {}, extra = {}) {
   };
 }
 
+// Notification extras when phone pairing is on (pure -> selftested): Click opens the mobile
+// console on the session; permission asks optionally carry one-tap Allow/Deny http actions that
+// POST straight back to the LAN listener. Both are dropped when remote access is off — a click
+// URL nobody can reach is worse than none.
+function notificationExtras({ kind, sessionId, requestId, base, token, actionsEnabled } = {}) {
+  if (!base || !sessionId) return {};
+  const out = { click: base + '/#session=' + encodeURIComponent(sessionId) };
+  if (kind === 'input' && actionsEnabled && token && requestId) {
+    const act = (d) => base + '/api/chat/permission?id=' + encodeURIComponent(sessionId) + '&requestId=' + encodeURIComponent(requestId) + '&decision=' + d;
+    out.actions = [
+      'http, Allow, ' + act('allow') + ', method=POST, clear=true, headers.x-corral-token=' + token,
+      'http, Deny, ' + act('deny') + ', method=POST, clear=true, headers.x-corral-token=' + token,
+    ].join('; ');
+  }
+  return out;
+}
+
+// The pairing base the phone can actually reach — first LAN address + remote port, or '' when
+// remote access is disabled.
+function remoteBase() {
+  const rc = remote.get();
+  if (!rc.enabled || !rc.token) return { base: '', token: '' };
+  const addr = remote.lanAddresses()[0];
+  return addr ? { base: 'http://' + addr + ':' + rc.port, token: rc.token } : { base: '', token: '' };
+}
+
 // --- delivery ---
-async function send({ title, body, tags, priority }, cfg = get()) {
+async function send({ title, body, tags, priority, click, actions }, cfg = get()) {
   if (!cfg.topic) throw new Error('no topic configured');
+  // ntfy headers are latin-1; strip anything outside to stay safe with unicode project names
+  const headers = {
+    Title: String(title || 'corral').replace(/[^\x20-\x7e]/g, '?'),
+    Tags: tags || '', Priority: priority || 'default',
+  };
+  if (click) headers.Click = click;
+  if (actions) headers.Actions = actions;
   const res = await fetch(cfg.server + '/' + encodeURIComponent(cfg.topic), {
     method: 'POST',
     body: body || '',
-    // ntfy headers are latin-1; strip anything outside to stay safe with unicode project names
-    headers: {
-      Title: String(title || 'corral').replace(/[^\x20-\x7e]/g, '?'),
-      Tags: tags || '', Priority: priority || 'default',
-    },
+    headers,
   });
   if (!res.ok) throw new Error('relay ' + res.status);
 }
@@ -118,7 +152,9 @@ function notifySession(kind, s, extra = {}) {
   const now = Date.now();
   if (now - (lastSent.get(key) || 0) < COOLDOWN_MS) return;
   lastSent.set(key, now);
-  send(messageFor(kind, s, extra), cfg).catch((e) => console.error('push failed:', e.message));
+  const { base, token } = remoteBase();
+  const extras = notificationExtras({ kind, sessionId: s && s.id, requestId: extra.requestId, base, token, actionsEnabled: cfg.actions });
+  send({ ...messageFor(kind, s, extra), ...extras }, cfg).catch((e) => console.error('push failed:', e.message));
 }
 
-module.exports = { get, set, send, messageFor, notifySession };
+module.exports = { get, set, send, messageFor, notificationExtras, notifySession };

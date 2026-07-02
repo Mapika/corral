@@ -7,7 +7,20 @@ tunnels — so access to it is the security boundary.
 ## Protections (enforced)
 
 - **Loopback only.** The backend binds `127.0.0.1` (`CORRAL_BIND`; legacy `CODAPP_BIND` also
-  honored), never `0.0.0.0`. It is not reachable from the LAN.
+  honored), never `0.0.0.0`. It is not reachable from the LAN — unless the operator explicitly
+  enables **remote access (phone pairing)**, which opens a *second*, separately-authenticated
+  listener; see below.
+- **Remote access is opt-in and pairing-token-gated.** The phone listener (default port 7879,
+  `remote.js`) is off by default, toggled from the desktop UI, and torn down again on disable.
+  Non-loopback callers must present the durable 32-byte pairing token — always, even in tokenless
+  dev mode, and the desktop's per-run token is *not* accepted from the LAN. The pairing token and
+  the machine's addresses are only ever revealed to loopback callers (`/api/remote`), so a remote
+  client can't read the credential back; remote callers also cannot change remote-access settings.
+  Allowed browser origins for the phone are restricted to private-network hosts (RFC 1918 +
+  Tailscale CGNAT) — public origins stay blocked, so internet-side DNS rebinding still fails.
+  Tradeoff: the transport is plain HTTP, so the pairing token and traffic are visible to the local
+  network path — enable it on trusted networks only (home Wi-Fi, tailnet), and rotate the code
+  from the pairing dialog if a phone is lost.
 - **Per-run token.** The Tauri shell mints a 32-byte token and passes it to the sidecar via
   `CORRAL_TOKEN` (legacy `CODAPP_TOKEN` also honored). Every `/api/*` request must present it
   (constant-time compare). The WebView

@@ -153,6 +153,7 @@ function mkIO(s) {
       }
       if (ev.type === 'result') {
         s.status = 'idle'; touch(s);
+        s.pendingPerms = null;                  // turn over — nothing can still be waiting
         // cumulative usage for the roster/dashboard: claude's total_cost_usd is session-cumulative;
         // tokens accumulate per finished turn for every agent.
         if (ev.total_cost_usd != null) s.costUsd = ev.total_cost_usd;
@@ -161,7 +162,17 @@ function mkIO(s) {
         // phone push only when nothing follows automatically (a queued follow-up keeps the turn going)
         if (!(s.inputQueue && s.inputQueue.length)) push.notifySession('done', s, { costUsd: ev.total_cost_usd });
       }
-      if (ev.type === '_permission_request') push.notifySession('input', s, { tool: ev.tool });
+      // Track open permission prompts on the roster record so list()/the events channel can say
+      // "waiting on you: Bash — npm test" without every client attaching to the chat stream.
+      if (ev.type === '_permission_request') {
+        (s.pendingPerms = s.pendingPerms || new Map()).set(String(ev.id), { tool: ev.tool || 'tool', summary: permSummary(ev.input) });
+        touch(s); persist();
+        push.notifySession('input', s, { tool: ev.tool, requestId: String(ev.id) });
+      }
+      if (ev.type === '_permission_resolved' && s.pendingPerms) {
+        s.pendingPerms.delete(String(ev.id));
+        touch(s); persist();
+      }
       emit(s, ev);
       // a queued follow-up goes out the moment the turn ends (its _user echo already rendered)
       if (ev.type === 'result' && s.inputQueue && s.inputQueue.length && s.status === 'idle') {
@@ -171,11 +182,11 @@ function mkIO(s) {
       }
     },
     exit(code) {
-      s.inputQueue = []; s.status = 'exited'; s.proc = null; s.pid = null; emit(s, { type: '_exit', code }); persist();
+      s.inputQueue = []; s.status = 'exited'; s.proc = null; s.pid = null; s.pendingPerms = null; emit(s, { type: '_exit', code }); persist();
       if (!s._userEnded) push.notifySession('fail', s, { detail: code != null ? 'exit code ' + code : '' });
     },
     fail(msg) {
-      s.inputQueue = []; s.status = 'error'; emit(s, { type: '_error', message: msg }); persist();
+      s.inputQueue = []; s.status = 'error'; s.pendingPerms = null; emit(s, { type: '_error', message: msg }); persist();
       push.notifySession('fail-error', s, { detail: msg });
     },
   };
@@ -307,9 +318,25 @@ function remove(id) {
   sessions.delete(id); persist(); return true;
 }
 function get(id) { return sessions.get(id); }
+// What a permission prompt is about, roster-sized (pure -> selftested): the one field a human
+// decides on — a command, a path, a url — never the whole input blob.
+function permSummary(input) {
+  if (!input || typeof input !== 'object') return '';
+  for (const k of ['command', 'file_path', 'path', 'pattern', 'url', 'description', 'prompt']) if (input[k]) return String(input[k]).slice(0, 120);
+  return '';
+}
+// Open permission prompts, roster-shaped: { count, id, tool, summary } (the most recent ask) or
+// null. The id lets a client answer straight from the roster (POST /api/chat/permission) without
+// attaching to the chat stream first.
+const pendingPermView = s => {
+  if (!s.pendingPerms || !s.pendingPerms.size) return null;
+  const id = [...s.pendingPerms.keys()].pop();
+  const latest = s.pendingPerms.get(id);
+  return { count: s.pendingPerms.size, id, tool: latest.tool, summary: latest.summary || '' };
+};
 function list() {
   return [...sessions.values()].map(s =>
-    ({ id: s.id, agent: s.agent || 'claude', host: s.host, cwd: s.cwd, model: s.model, status: s.status, sessionId: s.sessionId, createdAt: s.createdAt, updatedAt: s.updatedAt || s.createdAt, note: s.note || null, label: s.label || null, worktree: !!s.worktree, costUsd: s.costUsd ?? null, tokIn: s.tokIn || 0, tokOut: s.tokOut || 0 }));
+    ({ id: s.id, agent: s.agent || 'claude', host: s.host, cwd: s.cwd, model: s.model, status: s.status, sessionId: s.sessionId, createdAt: s.createdAt, updatedAt: s.updatedAt || s.createdAt, note: s.note || null, label: s.label || null, worktree: !!s.worktree, costUsd: s.costUsd ?? null, tokIn: s.tokIn || 0, tokOut: s.tokOut || 0, pendingPerm: pendingPermView(s) }));
 }
 
 // Operator display label: shows on the roster, never reaches an argv. Control chars stripped,
@@ -354,5 +381,5 @@ watchdogTimer.unref?.();                                    // must never keep t
 
 module.exports = { launch, buildSpawn: claude.buildSpawn, resume, loadRoster, parseTranscript: claude.parseTranscript,
   searchHistory: claude.searchHistory, setLabel, cleanLabel,
-  send, respondPermission, interrupt, attach, kill, remove, get, list, killAll, flush, onAnyChange, watchdogVerdict,
+  send, respondPermission, interrupt, attach, kill, remove, get, list, killAll, flush, onAnyChange, watchdogVerdict, permSummary,
   CLAUDE, SSH, AGENTS, PERM_MODES, PERM_DECISIONS, SAFE_ARG, SAFE_HOST, _sessions: sessions };
