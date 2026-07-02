@@ -17,6 +17,9 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - name: phone smoke (demo herd at 390x844)
+        run: npx playwright test
 
   # Warm the Rust caches for the release matrix. Actions cache scoping only lets a run restore
   # caches from its own ref or the default branch — release runs live on tag refs, so without

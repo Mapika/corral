@@ -1,5 +1,7 @@
 node_modules/
 .playwright-mcp/
+test-results/
+playwright-report/
 servers.json
 tunnels.json
 *.log
