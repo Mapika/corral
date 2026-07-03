@@ -150,6 +150,13 @@ jobs:
               open(p, 'w').write(s)
           print(s)
           EOF
+          # R8 keeps native methods (default AGP rules) but strips methods only JNI calls —
+          # startService/stopService have no Java-visible callers and vanished (NoSuchMethodError
+          # on-device). Keep the whole bridge + service.
+          cat >> src-tauri/gen/android/app/proguard-rules.pro <<'EOF'
+          -keep class io.github.mapika.corral.PocketBridge { *; }
+          -keep class io.github.mapika.corral.PocketService { *; }
+          EOF
           MANIFEST=src-tauri/gen/android/app/src/main/AndroidManifest.xml
           sed -i 's#<uses-permission android:name="android.permission.INTERNET" */>#<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />#' "$MANIFEST"
           sed -i 's#</application>#    <service\n            android:name=".PocketService"\n            android:exported="false"\n            android:foregroundServiceType="specialUse">\n            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="On-device coding agent backend" />\n        </service>\n    </application>#' "$MANIFEST"
