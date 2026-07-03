@@ -10,11 +10,12 @@ Web Push straight from the backend (RFC 8291/8292 on node:crypto, no relay, self
 the RFC vectors) with enrolment in the phone console's settings sheet; ntfy stays as the
 alternative transport. Notification taps land on the session in both transports.
 
-## 0.6 — one phone, many ranches
+## 0.6 — one phone, many ranches *(shipped)*
 
 Multi-server pairing: the herd spans the desktop, the homelab box, and the office machine, with
 one merged "needs you" list. Roster merging, per-server tokens, per-server connection state,
-conflict UX. The biggest deferred item and the headline feature of the run-up.
+conflict UX (re-pair = key refresh, name suffixing, namespaced session ids). Pocket mode joins
+the roster as "this phone" and coexists with paired desktops.
 
 ## 0.7 — builds people can trust
 
