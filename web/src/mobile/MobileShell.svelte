@@ -2,12 +2,12 @@
   // The phone console: HERD (decide) · RANCH (launch) · FLEET (watch), with chat as a full-screen
   // push. Built for thumbs on the Ink system — flush surfaces, seams, one warm signal.
   import { untrack } from 'svelte';
-  import { getServer, getWebPush, resumeSession, testWebPush, webPushSubscribe, webPushUnsubscribe } from '../lib/api.js';
+  import { getWebPush, testWebPush, webPushSubscribe, webPushUnsubscribe } from '../lib/api.js';
   import { applicationServerKeyBytes, subscriptionParams } from '../lib/webPushClient.mjs';
   import { releaseUpdate, sessionFromDeepLink } from '../lib/appUpdate.mjs';
-  import { clearPocket, onPocketState, pocketEnabled, pocketLoggedIn, startPocket, stopPocket } from '../lib/pocket.js';
+  import { clearPocket, onPocketState, pocketAvailable, pocketEnabled, pocketLoggedIn, startPocket, stopPocket } from '../lib/pocket.js';
   import { pushOverlay, showToast, toast } from './nav.svelte.js';
-  import { SERVER_KEY, TOKEN_KEY } from '../lib/serverBase.mjs';
+  import { parseRanches, RANCHES_KEY, serializeRanches, upsertRanch } from '../lib/ranches.mjs';
   import { isResumableSession } from '../lib/operatorStatus.mjs';
   import Icon from '../lib/Icon.svelte';
   import Connect from './Connect.svelte';
@@ -39,10 +39,13 @@
   // Web Push enrolment (browser pages only — the APK webview has no push, it uses ntfy/corral://).
   let notif = $state({ supported: false, subscribed: false, busy: false, denied: false, error: '', note: '' });
 
-  const data = createMobileData();
+  const data = createMobileData({ standalone });
 
   let liveCount = $derived(data.d.sessions.filter((s) => s.status === 'busy' || s.status === 'starting').length);
   let needCount = $derived(data.d.sessions.filter((s) => s.pendingPerm || s.status === 'error' || s.status === 'exited').length);
+  let ranchCount = $derived(data.d.ranches.length);
+  // Partial trouble: some ranches unreachable while others answer — worth a word in the header.
+  let degraded = $derived(data.d.offlineCount > 0 && !data.d.offline);
 
   $effect(() => {
     if (!paired) return;
@@ -170,12 +173,12 @@
     pull = 0;
   }
 
-  const chatDesc = (s) => ({ kind: 'chat', id: s.id, agent: s.agent || 'claude', host: s.host, cwd: s.cwd, model: s.model, status: s.status, sessionId: s.sessionId, label: s.label || null });
+  const chatDesc = (s) => ({ kind: 'chat', id: s.id, ranch: s.ranch, ranchName: s.ranchName, agent: s.agent || 'claude', host: s.host, cwd: s.cwd, model: s.model, status: s.status, sessionId: s.sessionId, label: s.label || null });
   async function openSession(s) {
     let next = s;
     if (s.status === 'dormant' || isResumableSession(s)) {
       try {
-        const r = await resumeSession(s.id);
+        const r = await data.clientFor(s.ranch).resumeSession(s.id);
         if (r?.ok === false) return;
         next = { ...s, status: 'starting' };
         await data.poll();
@@ -184,14 +187,54 @@
     chat = chatDesc(next);
   }
   let pocketOn = $state(pocketEnabled());
-  function unpair() {
-    try { localStorage.removeItem(SERVER_KEY); localStorage.removeItem(TOKEN_KEY); } catch (e) {}
-    clearPocket();
-    stopPocket().finally(() => location.reload());
+
+  // First pairing (boot Connect): the data layer isn't running yet, so seed the roster in
+  // storage directly; start() reads it. A pocket "Run on this phone" arrives with no ranch info.
+  function bootPaired(info) {
+    if (info) {
+      try {
+        const list = upsertRanch(parseRanches(localStorage.getItem(RANCHES_KEY)), { ...info, now: Date.now() }).list;
+        localStorage.setItem(RANCHES_KEY, serializeRanches(list));
+      } catch (e) {}
+    }
+    paired = true;
+    pocketOn = pocketEnabled();
+  }
+
+  // Ranch N+1, added from settings while everything is live.
+  let addOpen = $state(false);
+  function addPaired(info) {
+    addOpen = false;
+    if (!info) return;
+    const { ranch, refreshed } = data.addRanch(info);
+    showToast(refreshed ? ranch.name + ' was already paired — pairing key refreshed.' : 'Paired with ' + ranch.name + '.');
+  }
+
+  // Per-ranch renames, inline in the settings sheet.
+  let renamingRanch = $state(null);       // ranch id under edit
+  let ranchDraft = $state('');
+  function saveRanchName(r) {
+    const next = ranchDraft.trim();
+    renamingRanch = null;
+    if (next && next !== r.name) data.renameRanchById(r.id, next);
+  }
+
+  function unpairRanch(r) {
+    if (r.kind === 'pocket') {
+      clearPocket();
+      pocketOn = false;
+      data.removeRanchById(r.id);
+      stopPocket();
+    } else {
+      data.removeRanchById(r.id);
+      showToast('Unpaired from ' + r.name + '.');
+    }
+    if (standalone && data.d.ranches.length === 0) { settingsOpen = false; paired = false; }
   }
 
   // Watchdog signal: the shell restarts a crashed on-device backend and reports over pocket-state
-  // (pocket.js rewires the client base/token; here we surface it and refresh the roster).
+  // (pocket.js refreshes its base/token; here we surface it and refresh the roster).
+  let pocketRanch = $derived(data.d.ranches.find((r) => r.kind === 'pocket') || null);
   let pocketDown = $state(false);
   let pocketRestarting = $state(false);
   $effect(() => {
@@ -201,6 +244,21 @@
       if (p.running) { data.poll(); claudeAuthed = null; probeAuth(); }
     });
   });
+  // Pocket can join the herd later, from settings (e.g. the phone started out pair-only).
+  let pocketAvail = $state(false);
+  let pocketStarting = $state(false);
+  $effect(() => { if (settingsOpen && standalone && !pocketOn) pocketAvailable().then((ok) => (pocketAvail = ok)); });
+  async function runPocketFromSettings() {
+    pocketStarting = true;
+    try {
+      await startPocket();
+      pocketOn = true;
+      data.attachPocket();
+      probeAuth();
+    } catch (e) { showToast('Could not start the on-device backend' + (e?.message ? ' — ' + e.message : '.')); }
+    finally { pocketStarting = false; }
+  }
+
   // Manual restart for when the watchdog gave up (or the app just woke to a dead backend).
   async function restartPocket() {
     pocketRestarting = true;
@@ -288,7 +346,7 @@
 </script>
 
 {#if standalone && !paired}
-  <Connect onPaired={() => { paired = true; pocketOn = pocketEnabled(); }} initialError={pocketError} />
+  <Connect onPaired={bootPaired} initialError={pocketError} />
 {:else}
   <div class="mshell">
     <header class="top">
@@ -296,6 +354,8 @@
       <span class="sp"></span>
       {#if data.d.offline}
         <span class="off"><span class="odot"></span>offline</span>
+      {:else if degraded}
+        <span class="off"><span class="odot"></span>{data.d.offlineCount} of {ranchCount} offline</span>
       {:else if data.d.loaded && !data.d.live}
         <span class="off"><span class="pdot2"></span>polling</span>
       {:else if liveCount}
@@ -305,7 +365,7 @@
       <button class="gear" onclick={() => (settingsOpen = true)} aria-label="Settings"><Icon name="kebab" size={16} stroke={2.75} /></button>
     </header>
 
-    {#if pocketOn && (pocketDown || data.d.offline)}
+    {#if pocketOn && (pocketDown || pocketRanch?.offline)}
       <button class="nudge" onclick={restartPocket} disabled={pocketRestarting}>
         <span class="odot"></span>
         {pocketRestarting ? 'restarting…' : pocketDown ? 'the on-device backend is down — tap to restart' : 'not responding — tap to restart'}
@@ -339,8 +399,8 @@
     </nav>
 
     {#if chat}
-      {#key chat.id}
-        <MobileChat session={chat} onclose={() => { chat = null; data.poll(); }} onchanged={() => data.poll()} />
+      {#key (chat.ranch || '') + ':' + chat.id}
+        <MobileChat session={chat} client={data.clientFor(chat.ranch)} onclose={() => { chat = null; data.poll(); }} onchanged={() => data.poll()} />
       {/key}
     {/if}
 
@@ -362,10 +422,33 @@
     {#if settingsOpen}
       <Sheet onclose={() => (settingsOpen = false)} label="Settings">
         <div class="settings">
-          <h2>Connection</h2>
-          <p class="kv"><span>Server</span><code>{pocketOn ? 'this phone' : getServer() || 'this device'}</code></p>
-          <p class="kv"><span>Stream</span><code>{data.d.live ? 'live' : data.d.offline ? 'offline' : 'polling'}</code></p>
-          {#if data.d.error}<p class="errline">{data.d.error}</p>{/if}
+          <h2>{ranchCount === 1 ? 'Ranch' : 'Ranches'}</h2>
+          {#each data.d.ranches as r (r.id)}
+            <div class="ranchrow">
+              {#if renamingRanch === r.id}
+                <div class="renamerow">
+                  <!-- svelte-ignore a11y_autofocus -->
+                  <input bind:value={ranchDraft} autofocus maxlength="40"
+                         onkeydown={(e) => { if (e.key === 'Enter') saveRanchName(r); }} />
+                  <button class="savebtn" onclick={() => saveRanchName(r)}>Save</button>
+                </div>
+              {:else}
+                <button class="rmain" onclick={() => { renamingRanch = r.id; ranchDraft = r.name; }} title="Rename">
+                  <span class="rdot" class:live={r.live} class:down={r.offline}></span>
+                  <span class="rname">{r.name}</span>
+                  <code class="rbase">{r.kind === 'pocket' ? 'this phone' : r.kind === 'origin' ? 'this device' : r.base.replace(/^https?:\/\//, '')}</code>
+                </button>
+                {#if r.kind !== 'origin'}
+                  <button class="rkill" onclick={() => unpairRanch(r)}>{r.kind === 'pocket' ? 'stop' : 'unpair'}</button>
+                {/if}
+              {/if}
+            </div>
+            {#if r.offline && r.error}<p class="errline">{r.error}</p>{/if}
+          {/each}
+          <button class="unpair checkupd" onclick={() => { settingsOpen = false; addOpen = true; }}>Add a ranch</button>
+          {#if standalone && !pocketOn && pocketAvail}
+            <button class="unpair checkupd" onclick={runPocketFromSettings} disabled={pocketStarting}>{pocketStarting ? 'Starting…' : 'Run Corral on this phone'}</button>
+          {/if}
           {#if !standalone}
             <h2 class="apph">Notifications</h2>
             {#if !notif.supported}
@@ -401,7 +484,6 @@
             {#if login.error}<p class="errline">{login.error}</p>{/if}
           {/if}
           {#if standalone}
-            <button class="unpair" onclick={unpair}>{pocketOn ? 'Stop running on this phone' : 'Unpair from this server'}</button>
             <h2 class="apph">App</h2>
             <p class="kv"><span>Version</span><code>v{VERSION}</code></p>
             <button class="unpair checkupd" onclick={checkUpdate} disabled={update?.checking}>{update?.checking ? 'checking…' : 'Check for updates'}</button>
@@ -417,6 +499,12 @@
           {/if}
           <p class="hint">Phone push (ntfy) and remote access are configured on the desktop app.</p>
         </div>
+      </Sheet>
+    {/if}
+
+    {#if addOpen}
+      <Sheet onclose={() => (addOpen = false)} label="Add a ranch">
+        <Connect mode="add" onPaired={addPaired} />
       </Sheet>
     {/if}
 
@@ -459,6 +547,19 @@
   .ranchbtn { flex: none !important; align-self: center; width: 44px; min-height: 44px !important; margin: 4px 10px; border-radius: var(--pill) !important; background: var(--paper) !important; color: var(--ink) !important; font-size: 22px !important; letter-spacing: 0 !important; line-height: 1; }
 
   .settings h2 { margin: 0 0 var(--s3); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; font-weight: var(--w-reg); color: var(--text-faint); }
+  .ranchrow { display: flex; align-items: stretch; border-bottom: 1px solid var(--seam); }
+  .rmain { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 2px; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+  .rdot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); }
+  .rdot.live { background: var(--mercury); }
+  .rdot.down { background: var(--alert); }
+  .rname { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 14px; font-weight: var(--w-med); }
+  .rbase { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; color: var(--text-faint); font: 11px var(--mono); }
+  .rkill { flex: none; background: none; border: 0; color: var(--text-dim); font-size: 10px; letter-spacing: .14em; text-transform: uppercase; padding: 0 2px 0 14px; cursor: pointer; }
+  .rkill:active { color: var(--alert); }
+  .renamerow { flex: 1; display: flex; gap: 10px; align-items: center; padding: 8px 0; }
+  .renamerow input { flex: 1; min-width: 0; background: var(--surface-2); border: 0; outline: 0; color: var(--text); font: 16px var(--sans); padding: 11px 13px; }
+  .renamerow input:focus { box-shadow: inset 0 0 0 1px var(--text-dim); }
+  .savebtn { flex: none; min-height: 42px; border: 0; background: var(--paper); color: var(--ink); border-radius: var(--pill); padding: 0 18px; font: var(--w-med) 13px var(--sans); cursor: pointer; }
   .kv { display: flex; justify-content: space-between; gap: 12px; margin: 0; padding: 12px 0; border-bottom: 1px solid var(--seam); font-size: 13px; color: var(--text-dim); }
   .kv code { font: 12px var(--mono); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .errline { color: var(--alert); font-size: 12px; }

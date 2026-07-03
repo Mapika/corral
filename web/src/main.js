@@ -3,15 +3,18 @@ import './tokens.css';
 import './app.css';
 import './prose.css';
 import Root from './Root.svelte';
-import { setServer, setToken } from './lib/api.js';
+import { setToken } from './lib/api.js';
 import { pocketEnabled, startPocket } from './lib/pocket.js';
+import { parseRanches, RANCHES_KEY, serializeRanches, upsertRanch } from './lib/ranches.mjs';
 import { isLoopbackPage, isStandaloneShell, normalizeBase, SERVER_KEY, TOKEN_KEY } from './lib/serverBase.mjs';
 
 // Where the auth comes from, by how this page is running:
 //  - Desktop shell / pair link: the token arrives in the URL fragment (#tk=…) — read + scrub it.
 //    A phone browser (non-loopback page) also persists it so the installed page survives reloads.
 //  - Standalone shell (the mobile app; pages ship in the bundle, no same-origin backend): the
-//    paired server origin + durable token come from storage; if absent, Root shows Connect.
+//    ranch roster (paired servers + durable tokens) comes from storage; if it's empty and pocket
+//    mode is off, Root shows Connect. The per-ranch clients are the data layer's business — the
+//    global client stays unpointed here.
 //  - Plain dev browser: no token, backend is permissive.
 async function boot() {
   const standalone = isStandaloneShell();
@@ -35,11 +38,7 @@ async function boot() {
       }
       bootStatus('');
     }
-    if (!paired) {
-      let base = '', token = '';
-      try { base = normalizeBase(localStorage.getItem(SERVER_KEY)); token = localStorage.getItem(TOKEN_KEY) || ''; } catch (e) {}
-      if (base && token) { setServer(base); setToken(token); paired = true; }
-    }
+    paired = migrateLegacyPairing() || paired;
   } else if (!loopback) {
     let token = '';
     try { token = localStorage.getItem(TOKEN_KEY) || ''; } catch (e) {}
@@ -56,6 +55,24 @@ async function boot() {
     try { navigator.serviceWorker.register('/sw.js'); } catch (e) {}
   }
 }
+// One phone, many ranches: the roster (corral-ranches) supersedes the single server/token pair
+// of 0.5 and earlier — fold an existing pair in as the first ranch, then drop the old keys.
+// Returns whether any ranch is paired.
+function migrateLegacyPairing() {
+  let ranches = [];
+  try {
+    ranches = parseRanches(localStorage.getItem(RANCHES_KEY));
+    const base = normalizeBase(localStorage.getItem(SERVER_KEY));
+    const token = localStorage.getItem(TOKEN_KEY) || '';
+    if (base && token) {
+      ranches = upsertRanch(ranches, { base, token, now: Date.now() }).list;
+      localStorage.setItem(RANCHES_KEY, serializeRanches(ranches));
+      localStorage.removeItem(SERVER_KEY); localStorage.removeItem(TOKEN_KEY);
+    }
+  } catch (e) {}
+  return ranches.length > 0;
+}
+
 // Pre-mount status line (Svelte isn't up yet while the pocket backend boots). Cleared before
 // mount — Svelte 5 mount() appends to the target rather than replacing its contents.
 function bootStatus(msg) {

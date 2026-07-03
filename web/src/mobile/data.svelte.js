@@ -129,6 +129,15 @@ export function createMobileData({ standalone = false } = {}) {
     return { ranch, refreshed };
   }
 
+  // Pocket turned on after boot ("Run on this phone" from settings) — join the herd live.
+  function attachPocket() {
+    if (d.ranches.some((r) => r.kind === 'pocket')) return;
+    const rec = { id: 'pocket', name: 'this phone', base: '', token: '', kind: 'pocket', ...runtime };
+    d.ranches.unshift(rec);
+    startConn(rec);
+    recompute();
+  }
+
   function removeRanchById(id) {
     stopConn(id);
     d.ranches = d.ranches.filter((r) => r.id !== id);
@@ -199,5 +208,5 @@ export function createMobileData({ standalone = false } = {}) {
     try { localStorage.setItem(RECENT_ROOTS_KEY, serializeRecentRoots(d.recentRoots)); } catch (e) {}
   }
 
-  return { d, start, stop, poll, loadHosts, rememberRoot, clientFor, addRanch, removeRanchById, renameRanchById };
+  return { d, start, stop, poll, loadHosts, rememberRoot, clientFor, addRanch, attachPocket, removeRanchById, renameRanchById };
 }

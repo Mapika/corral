@@ -1,13 +1,14 @@
 <script>
-  // Pairing screen for the standalone app: scan the QR the desktop shows (camera + BarcodeDetector
-  // where the webview offers them) or paste the pair link. Verifies against the server before
-  // persisting, so a bad link never strands the app.
-  import { setServer, setToken } from '../lib/api.js';
+  // Pairing screen: scan the QR the desktop shows (camera + BarcodeDetector where the webview
+  // offers them) or paste the pair link. Verifies against the server before reporting anything,
+  // so a bad link never strands the app. Persistence is the caller's job — at boot the shell
+  // seeds the roster, later the same screen adds ranch N+1 ('add' mode: compact, no pocket).
   import { requestJson } from '../lib/apiRequest.mjs';
   import { pocketAvailable, startPocket } from '../lib/pocket.js';
-  import { parsePairInput, SERVER_KEY, TOKEN_KEY } from '../lib/serverBase.mjs';
+  import { defaultRanchName } from '../lib/ranches.mjs';
+  import { parsePairInput } from '../lib/serverBase.mjs';
 
-  let { onPaired, initialError = '' } = $props();
+  let { onPaired, initialError = '', mode = 'boot' } = $props();
 
   let input = $state('');
   let busy = $state(false);
@@ -20,9 +21,10 @@
 
   const canScan = typeof BarcodeDetector !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
 
-  // Pocket builds carry an on-device runtime — offer "Run on this phone" above pairing.
+  // Pocket builds carry an on-device runtime — offer "Run on this phone" above pairing (at boot;
+  // when adding a ranch to a running console the pocket option lives in settings instead).
   let pocketOk = $state(false);
-  $effect(() => { pocketAvailable().then((ok) => (pocketOk = ok)); });
+  $effect(() => { if (mode === 'boot') pocketAvailable().then((ok) => (pocketOk = ok)); });
 
   async function runLocal() {
     busy = true; error = '';
@@ -47,10 +49,9 @@
     if (!token) { error = 'That link is missing its pairing code — copy the full link (…#tk=…).'; return; }
     busy = true; error = '';
     try {
-      await requestJson(base + '/api/chat/list', { headers: { Authorization: 'Bearer ' + token }, retries: 1 });
-      try { localStorage.setItem(SERVER_KEY, base); localStorage.setItem(TOKEN_KEY, token); } catch (e) {}
-      setServer(base); setToken(token);
-      onPaired?.();
+      // /api/hosts doubles as the verification ping and tells us what the box calls itself.
+      const h = await requestJson(base + '/api/hosts', { headers: { Authorization: 'Bearer ' + token }, retries: 1 });
+      onPaired?.({ base, token, name: defaultRanchName(base, h && h.hostname) });
     } catch (e) {
       error = e?.status === 401 || e?.status === 403
         ? 'The server refused this pairing code. Open the QR on the desktop again and rescan.'
@@ -98,11 +99,16 @@
   $effect(() => () => stopScan());
 </script>
 
-<div class="connect">
+<div class="connect" class:add={mode === 'add'}>
   <div class="hero">
-    <span class="brand">corral</span>
-    <b>Pair with your&nbsp;ranch.</b>
-    <p>On the desktop app, open <span class="k">Phone</span> in the titlebar, enable remote access, and point the camera at the QR — or paste the pair link below.</p>
+    {#if mode === 'add'}
+      <b class="addttl">Add another&nbsp;ranch.</b>
+      <p>Open <span class="k">Phone</span> in that computer's titlebar, enable remote access, and scan its QR — or paste its pair link.</p>
+    {:else}
+      <span class="brand">corral</span>
+      <b>Pair with your&nbsp;ranch.</b>
+      <p>On the desktop app, open <span class="k">Phone</span> in the titlebar, enable remote access, and point the camera at the QR — or paste the pair link below.</p>
+    {/if}
   </div>
 
   {#if scanning}
@@ -132,6 +138,9 @@
 
 <style>
   .connect { min-height: 100dvh; display: flex; flex-direction: column; justify-content: center; gap: var(--s6); padding: var(--s6) var(--s5) calc(var(--s6) + env(safe-area-inset-bottom, 0px)); background: var(--bg); }
+  /* 'add' mode sits inside a settings sheet — no full-height hero, the sheet owns the chrome */
+  .connect.add { min-height: 0; justify-content: flex-start; gap: var(--s4); padding: 0 0 var(--s2); background: none; }
+  .addttl { font-size: 24px !important; }
   .hero { display: flex; flex-direction: column; gap: 14px; }
   .brand { font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: var(--text-faint); }
   .hero b { color: var(--text); font-size: clamp(38px, 11vw, 54px); line-height: .98; font-weight: var(--w-light); }
