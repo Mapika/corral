@@ -8,12 +8,14 @@
   import { recentRootsForHost } from '../lib/recentRoots.mjs';
   import Sheet from './Sheet.svelte';
 
-  let { data, onclose, onLaunched, initialDir = '' } = $props();
+  let { data, onclose, onLaunched, initialDir = '', initialBrief = '' } = $props();
 
   let host = $state('local');
   // svelte-ignore state_referenced_locally
   let dir = $state(initialDir);
-  let brief = $state('');       // optional first instruction — the agent starts on it immediately
+  // optional first instruction — the agent starts on it immediately. Seeded by Share -> Corral.
+  // svelte-ignore state_referenced_locally
+  let brief = $state(initialBrief);
   let agent = $state('claude');
   let model = $state(null);
   let perm = $state('auto');

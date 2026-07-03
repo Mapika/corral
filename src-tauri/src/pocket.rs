@@ -127,6 +127,108 @@ fn fgs_active(active: bool) {
     }
 }
 
+// Call a static PocketBridge method that returns String (nullable) — shared by takeShared and
+// the phone verbs.
+fn bridge_string_call(method: &str, sig: &str, args: &[jni::objects::JValue]) -> Result<Option<String>, String> {
+    let b = BRIDGE.get().ok_or("bridge unavailable (slim build?)")?;
+    let mut env = b.vm.attach_current_thread().map_err(|e| e.to_string())?;
+    let cls = unsafe { jni::objects::JClass::from_raw(b.cls.as_raw()) };
+    match env.call_static_method(&cls, method, sig, args) {
+        Ok(v) => {
+            let obj = v.l().map_err(|e| e.to_string())?;
+            if obj.is_null() {
+                return Ok(None);
+            }
+            let js = jni::objects::JString::from(obj);
+            let s = env.get_string(&js).map_err(|e| e.to_string())?;
+            Ok(Some(s.into()))
+        }
+        Err(e) => {
+            let _ = env.exception_describe();
+            let _ = env.exception_clear();
+            Err(format!("PocketBridge.{method}: {e}"))
+        }
+    }
+}
+
+// `phone` CLI backend: agents talk to a unix socket in the pocket root (same uid — the
+// filesystem is the auth, no token in agent env), one JSON request line -> one JSON reply.
+// The actual Android work happens in PocketBridge.phone (Kotlin).
+fn phone_dispatch(line: &str) -> String {
+    let bad = |m: &str| format!(r#"{{"ok":false,"error":{}}}"#, serde_json::Value::from(m));
+    let v: serde_json::Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(e) => return bad(&format!("bad request: {e}")),
+    };
+    let (verb, a, b) = (
+        v["verb"].as_str().unwrap_or(""),
+        v["a"].as_str().unwrap_or(""),
+        v["b"].as_str().unwrap_or(""),
+    );
+    let Some(br) = BRIDGE.get() else { return bad("bridge unavailable (slim build?)") };
+    let Ok(mut env) = br.vm.attach_current_thread() else { return bad("jvm attach failed") };
+    let cls = unsafe { jni::objects::JClass::from_raw(br.cls.as_raw()) };
+    let (Ok(jverb), Ok(ja), Ok(jb)) = (env.new_string(verb), env.new_string(a), env.new_string(b)) else {
+        return bad("jni string alloc failed");
+    };
+    let ret = env.call_static_method(
+        &cls,
+        "phone",
+        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+        &[(&jverb).into(), (&ja).into(), (&jb).into()],
+    );
+    match ret {
+        Ok(v) => match v.l() {
+            Ok(obj) if !obj.is_null() => {
+                let js = jni::objects::JString::from(obj);
+                let got = env.get_string(&js).map(String::from);
+                match got {
+                    Ok(s) => s,
+                    Err(e) => bad(&e.to_string()),
+                }
+            }
+            _ => bad("no response from bridge"),
+        },
+        Err(e) => {
+            let _ = env.exception_describe();
+            let _ = env.exception_clear();
+            bad(&format!("phone {verb}: {e}"))
+        }
+    }
+}
+
+static PHONE_BRIDGE: OnceLock<()> = OnceLock::new();
+
+fn start_phone_bridge(root: &Path) {
+    let sock = root.join("phone.sock");
+    PHONE_BRIDGE.get_or_init(|| {
+        let _ = std::fs::remove_file(&sock);
+        let listener = match std::os::unix::net::UnixListener::bind(&sock) {
+            Ok(l) => l,
+            Err(e) => {
+                log::warn!("phone bridge bind failed: {e}");
+                return;
+            }
+        };
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut c) = conn else { continue };
+                std::thread::spawn(move || {
+                    use std::io::{BufRead, BufReader, Write};
+                    let Ok(rc) = c.try_clone() else { return };
+                    let mut line = String::new();
+                    if BufReader::new(rc).read_line(&mut line).is_err() {
+                        return;
+                    }
+                    let resp = phone_dispatch(&line);
+                    let _ = c.write_all(resp.as_bytes());
+                    let _ = c.write_all(b"\n");
+                });
+            }
+        });
+    });
+}
+
 // nativeLibraryDir without JNI: the app's own cdylib (libapp_lib.so) is extracted to and loaded
 // from exactly that directory, so its mapping in /proc/self/maps reveals the path. (Tauri doesn't
 // expose the Android context to app code, so the usual getApplicationInfo() route isn't open.)
@@ -332,6 +434,11 @@ fn apply_runtime_env(cmd: &mut Command, root: &Path, native: &Path) {
             cmd.env("SSL_CERT_FILE", s(&cert));
         }
     }
+    // The `phone` shim (jniLibs script) execs node on phone.js against the bridge socket; all
+    // three land in agent env through the backend -> claude -> shell inheritance chain.
+    cmd.env("CORRAL_NODE_BIN", s(&root.join("rt/bin/node")))
+        .env("CORRAL_PHONE_JS", s(&root.join("backend/phone.js")))
+        .env("CORRAL_PHONE_SOCK", s(&root.join("phone.sock")));
 }
 
 fn spawn_backend(root: &Path, native: &Path) -> Result<Run, String> {
@@ -341,7 +448,10 @@ fn spawn_backend(root: &Path, native: &Path) -> Result<Run, String> {
     let home = root.join("home");
     let tmp = root.join("tmp");
     std::fs::create_dir_all(home.join("projects")).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(home.join("shared")).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    write_agent_readme(root);
+    start_phone_bridge(root);
     reap_stale(root);
     let port = free_port(7878);
     // The proxy port is probed too — 8899 hardcoded meant any other app squatting it silently
@@ -506,6 +616,36 @@ pub fn pocket_logged_in(app: tauri::AppHandle) -> bool {
     pocket_root(&app)
         .map(|r| r.join("home/.claude/.credentials.json").is_file())
         .unwrap_or(false)
+}
+
+// Share -> Corral: drain the payload MainActivity stashed in the bridge (JSON with text/subject/
+// files, files already copied into ~/shared). The webview polls on mount/resume.
+#[tauri::command]
+pub fn pocket_take_shared() -> Option<String> {
+    bridge_string_call("takeShared", "()Ljava/lang/String;", &[]).ok().flatten()
+}
+
+// Standing orientation for every agent on this phone: claude reads $HOME/.claude/CLAUDE.md
+// automatically, so this is how sessions learn about the environment's quirks and powers
+// without any per-session prompting. Overwritten each boot — it ships with the app, not the user.
+fn write_agent_readme(root: &Path) {
+    let dir = root.join("home/.claude");
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(
+        dir.join("CLAUDE.md"),
+        "# You are running ON the user's Android phone (Corral pocket)\n\n\
+         - Shared storage is at /sdcard (Download, DCIM, Documents, Pictures...). Files the user\n\
+           shares into Corral land in ~/shared.\n\
+         - The `phone` CLI bridges to the phone itself: `phone notify <title> [body]`,\n\
+           `phone battery`, `phone open <url>`, `phone share <text>`, `phone clip get`,\n\
+           `phone clip set <text>`. open/share need the app on screen (Android background-start\n\
+           rules); notify/battery always work. Use `phone notify` to tell the user when a long\n\
+           task finishes.\n\
+         - python3 + pip work (pure-python packages only — native wheels can't load here).\n\
+           node + npm-less JS works. `am`/`pm`/`dumpsys`/`content` are shimmed to run, but many\n\
+           system services refuse app callers — expect permission denials, don't fight them.\n\
+         - Keep heavy work modest: this is a phone on a battery.\n",
+    );
 }
 
 // Supervise the backend: notice node dying (crash, OOM, HyperOS killing sprees), restart it with

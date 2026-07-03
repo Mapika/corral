@@ -17,7 +17,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const pocket = join(root, 'src-tauri', 'pocket');
 const stage = join(pocket, 'stage');
 
-const FILES = ['server.js', 'chat.js', 'connectproxy.js', 'remote.js', 'push.js', 'webpush.js', 'tunnels.js', 'package.json'];
+const FILES = ['server.js', 'chat.js', 'connectproxy.js', 'phone.js', 'remote.js', 'push.js', 'webpush.js', 'tunnels.js', 'package.json'];
 const DIRS = ['agents', join('node_modules', 'ws')];
 
 rmSync(stage, { recursive: true, force: true });

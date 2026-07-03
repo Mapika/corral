@@ -248,6 +248,33 @@
     }
   }
 
+  // Share -> Corral: MainActivity stashed the payload in the bridge (files already copied to
+  // ~/shared); drain it on mount and on every return to the foreground, and turn it into a
+  // prefilled launch — the user picks the project and taps go.
+  let sharedBrief = $state('');
+  async function takeShared() {
+    if (!standalone || typeof window === 'undefined' || !window.__TAURI_INTERNALS__) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const raw = await invoke('pocket_take_shared');
+      if (!raw) return;
+      const s = JSON.parse(raw);
+      const lines = [];
+      if (s.subject) lines.push(s.subject);
+      if (s.text) lines.push(s.text);
+      for (const f of s.files || []) lines.push('Shared file: ' + f);
+      if (!lines.length) return;
+      sharedBrief = lines.join('\n');
+      launchOpen = true;
+    } catch (e) {}
+  }
+  $effect(() => {
+    takeShared();
+    const onVis = () => { if (document.visibilityState === 'visible') takeShared(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  });
+
   // Hardware back peels overlays (sheets register themselves via Sheet; chat and search are
   // full-screen pushes, so they register here where their state lives).
   $effect(() => {
@@ -325,8 +352,10 @@
     {/if}
 
     {#if launchOpen}
-      {#key launchDir}
-        <LaunchSheet {data} initialDir={launchDir} onclose={() => { launchOpen = false; launchDir = ''; }} onLaunched={(desc) => { launchOpen = false; launchDir = ''; chat = desc; }} />
+      {#key launchDir + sharedBrief}
+        <LaunchSheet {data} initialDir={launchDir} initialBrief={sharedBrief}
+          onclose={() => { launchOpen = false; launchDir = ''; sharedBrief = ''; }}
+          onLaunched={(desc) => { launchOpen = false; launchDir = ''; sharedBrief = ''; chat = desc; }} />
       {/key}
     {/if}
 

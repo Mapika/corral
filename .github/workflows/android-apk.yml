@@ -133,7 +133,8 @@ jobs:
           p = sys.argv[1]; s = open(p).read()
           init = '''try { PocketBridge.init(applicationContext) } catch (e: Throwable) {
                 android.util.Log.w("PocketBridge", "init failed: " + e)
-              }'''
+              }
+              try { PocketBridge.offerShared(applicationContext, intent) } catch (e: Throwable) {}'''
           if 'PocketBridge' not in s:
               needle = 'super.onCreate(savedInstanceState)'
               if needle in s:
@@ -151,13 +152,47 @@ jobs:
                   if s2 == s:
                       raise SystemExit('MainActivity pattern not found - tauri template changed?')
                   s = s2
-              open(p, 'w').write(s)
+          # Share -> Corral: a share while the app is alive (singleTask) arrives via onNewIntent.
+          if 'onNewIntent' not in s:
+              method = ('\n  override fun onNewIntent(intent: android.content.Intent) {\n'
+                        '    super.onNewIntent(intent)\n'
+                        '    try { PocketBridge.offerShared(applicationContext, intent) } catch (e: Throwable) {}\n'
+                        '  }\n')
+              i = s.rstrip().rfind('}')
+              if i < 0:
+                  raise SystemExit('MainActivity has no closing brace?')
+              s = s[:i] + method + s[i:]
+          open(p, 'w').write(s)
           print(s)
           EOF
           MANIFEST=src-tauri/gen/android/app/src/main/AndroidManifest.xml
           sed -i 's#<uses-permission android:name="android.permission.INTERNET" */>#<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />#' "$MANIFEST"
           sed -i 's#</application>#    <service\n            android:name=".PocketService"\n            android:exported="false"\n            android:foregroundServiceType="specialUse">\n            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="On-device coding agent backend" />\n        </service>\n    </application>#' "$MANIFEST"
           grep -q PocketService "$MANIFEST" || { echo 'service injection failed'; exit 1; }
+          # Share -> Corral: register as a share target (any type; MainActivity forwards to
+          # PocketBridge.offerShared, the webview turns it into a prefilled launch).
+          python3 - "$MANIFEST" <<'EOF'
+          import sys
+          p = sys.argv[1]; s = open(p).read()
+          filters = '''
+                  <intent-filter>
+                      <action android:name="android.intent.action.SEND" />
+                      <category android:name="android.intent.category.DEFAULT" />
+                      <data android:mimeType="*/*" />
+                  </intent-filter>
+                  <intent-filter>
+                      <action android:name="android.intent.action.SEND_MULTIPLE" />
+                      <category android:name="android.intent.category.DEFAULT" />
+                      <data android:mimeType="*/*" />
+                  </intent-filter>
+              '''
+          i = s.find('</activity>')
+          if i < 0:
+              raise SystemExit('no </activity> in manifest?')
+          s = s[:i] + filters + s[i:]
+          open(p, 'w').write(s)
+          EOF
+          grep -q 'android.intent.action.SEND' "$MANIFEST" || { echo 'share filter injection failed'; exit 1; }
           cat "$MANIFEST"
 
       - name: Build the APK (arm64)

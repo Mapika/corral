@@ -126,6 +126,7 @@ fn run_mobile() {
             set_attention,
             pocket::pocket_available,
             pocket::pocket_logged_in,
+            pocket::pocket_take_shared,
             pocket::pocket_start,
             pocket::pocket_status,
             pocket::pocket_stop,

@@ -148,6 +148,12 @@ for tool in am pm dumpsys content settings cmd service input; do
   echo "bin $tool lib${tool}_shim_exec.so" >>"$MAP"
 done
 
+# `phone` — the agent's bridge into the app itself (notify/battery/open/share/clip); the env
+# vars are set by apply_runtime_env in pocket.rs.
+printf '#!/system/bin/sh\nexec "$CORRAL_NODE_BIN" "$CORRAL_PHONE_JS" "$@"\n' >"$JNI/libphone_shim_exec.so"
+chmod 755 "$JNI/libphone_shim_exec.so"
+echo "bin phone libphone_shim_exec.so" >>"$MAP"
+
 # --- claude code: native musl binary + musl loader ------------------------
 # The npm package is a platform-binary installer these days; none of its optionalDeps match
 # android, so we ship the linux-arm64-musl binary in the APK and exec it through Alpine's musl
