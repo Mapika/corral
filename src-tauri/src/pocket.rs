@@ -114,6 +114,19 @@ fn fgs(method: &'static str) {
     }
 }
 
+// Wakelock policy knob: true while any session works (CPU pinned so screen-off inference keeps
+// moving), false when the herd idles (Doze may freeze the idle node — it thaws on next use).
+fn fgs_active(active: bool) {
+    let Some(b) = BRIDGE.get() else { return };
+    let Ok(mut env) = b.vm.attach_current_thread() else { return };
+    let cls = unsafe { jni::objects::JClass::from_raw(b.cls.as_raw()) };
+    if env.call_static_method(&cls, "setActive", "(Z)V", &[active.into()]).is_err() {
+        let _ = env.exception_describe();
+        let _ = env.exception_clear();
+        log::warn!("PocketBridge.setActive failed");
+    }
+}
+
 // nativeLibraryDir without JNI: the app's own cdylib (libapp_lib.so) is extracted to and loaded
 // from exactly that directory, so its mapping in /proc/self/maps reveals the path. (Tauri doesn't
 // expose the Android context to app code, so the usual getApplicationInfo() route isn't open.)
@@ -200,25 +213,32 @@ fn reap_stale(root: &Path) {
     let _ = std::fs::remove_file(run_file(root));
 }
 
-// Cheap loopback health check: authenticated GET against the roster endpoint. Decides between
-// adopting a surviving backend and spawning fresh; the watchdog uses it for adopted runs too.
-fn backend_alive(port: u16, token: &str) -> bool {
+// Loopback health check: authenticated GET against the roster endpoint. None = dead/unhealthy;
+// Some(n) = alive with n sessions currently working. Decides between adopting a surviving
+// backend and spawning fresh, and feeds the watchdog's wakelock policy (CPU pinned only while
+// agents actually work — an idle herd must not cost battery).
+fn backend_check(port: u16, token: &str) -> Option<usize> {
     use std::io::Write;
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-    let Ok(mut s) = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(800)) else {
-        return false;
-    };
+    let mut s = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(800)).ok()?;
     let _ = s.set_write_timeout(Some(std::time::Duration::from_millis(800)));
     let _ = s.set_read_timeout(Some(std::time::Duration::from_millis(2000)));
     let req = format!(
         "GET /api/chat/list HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n"
     );
-    if s.write_all(req.as_bytes()).is_err() {
-        return false;
+    s.write_all(req.as_bytes()).ok()?;
+    let mut body = String::new();
+    s.read_to_string(&mut body).ok()?;
+    if !body.starts_with("HTTP/1.1 200") {
+        return None;
     }
-    let mut buf = [0u8; 32];
-    let Ok(n) = s.read(&mut buf) else { return false };
-    String::from_utf8_lossy(&buf[..n]).starts_with("HTTP/1.1 200")
+    // Counting status markers beats parsing: the roster shape can grow fields freely and this
+    // stays correct as long as sessions carry a status string.
+    Some(body.matches("\"status\":\"busy\"").count() + body.matches("\"status\":\"starting\"").count())
+}
+
+fn backend_alive(port: u16, token: &str) -> bool {
+    backend_check(port, token).is_some()
 }
 
 fn gen_token() -> String {
@@ -451,17 +471,34 @@ fn start_watchdog(app: tauri::AppHandle) {
     }
     std::thread::spawn(move || {
         use tauri::{Emitter, Manager};
+        let mut active = false; // wakelock mirror — flip only on change
         loop {
             std::thread::sleep(std::time::Duration::from_secs(3));
             let state = app.state::<Pocket>();
             let mut guard = state.0.lock().unwrap();
             let Some(run) = guard.as_mut() else { break }; // stopped on purpose
-            if run.alive() {
+            let child_dead = run.child.as_mut().map_or(false, |c| c.try_wait().ok().flatten().is_some());
+            let check = if child_dead { None } else { backend_check(run.port, &run.token) };
+            let own_child_alive = run.child.is_some() && !child_dead;
+            if let Some(busy) = check {
+                drop(guard);
+                let want = busy > 0;
+                if want != active {
+                    active = want;
+                    fgs_active(want);
+                }
                 continue;
+            }
+            if own_child_alive {
+                continue; // HTTP hiccup while our child lives — transient, keep watching
             }
             log::warn!("pocket backend died — restarting");
             *guard = None;
             drop(guard);
+            if active {
+                active = false;
+                fgs_active(false);
+            }
             let _ = app.emit("pocket-state", PocketInfo { running: false, port: 0, token: String::new() });
             let mut revived = false;
             for delay in [1u64, 3, 9] {

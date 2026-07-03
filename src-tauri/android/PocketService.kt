@@ -21,8 +21,9 @@ import android.os.PowerManager
 // only) — `tauri android init` regenerates gen/android from templates on every build.
 class PocketService : Service() {
   // The FGS keeps the process un-cached but not the CPU awake: under Doze a long screen-off agent
-  // run stalls mid-inference. Held only while the backend runs (acquired here, released in
-  // onDestroy) — the battery cost is scoped to "agents are actually working".
+  // run stalls mid-inference. Held only while agents actually work — PocketBridge.setActive
+  // re-delivers onStartCommand with the busy state, so an idle herd costs no battery. An idle
+  // node may freeze under Doze; it thaws on next use.
   private var wakeLock: PowerManager.WakeLock? = null
 
   override fun onBind(intent: Intent?): IBinder? = null
@@ -34,12 +35,16 @@ class PocketService : Service() {
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    // Default false: the first start (and a START_STICKY resurrection, null intent) begins
+    // idle — the Rust watchdog raises it within seconds if agents are actually working.
+    val active = intent?.getBooleanExtra("active", false) ?: false
     val open = packageManager.getLaunchIntentForPackage(packageName)?.let {
       PendingIntent.getActivity(this, 0, it, PendingIntent.FLAG_IMMUTABLE)
     }
     val n: Notification = Notification.Builder(this, CHANNEL)
       .setContentTitle("Corral is running on this phone")
-      .setContentText("Agents keep working while the app is in the background.")
+      .setContentText(if (active) "Agents are working — they keep going with the screen off."
+                      else "Idle — ranch an agent and it runs right here.")
       .setSmallIcon(applicationInfo.icon)
       .setContentIntent(open)
       .setOngoing(true)
@@ -49,10 +54,15 @@ class PocketService : Service() {
     } else {
       startForeground(1, n)
     }
-    if (wakeLock == null) {
-      wakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
-        .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "corral:pocket")
-        .apply { setReferenceCounted(false); acquire() }
+    if (active) {
+      if (wakeLock == null) {
+        wakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
+          .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "corral:pocket")
+          .apply { setReferenceCounted(false); acquire() }
+      }
+    } else {
+      wakeLock?.release()
+      wakeLock = null
     }
     return START_STICKY
   }

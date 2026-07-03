@@ -41,5 +41,15 @@ object PocketBridge {
     ctx.stopService(Intent(ctx, PocketService::class.java))
   }
 
+  // Wakelock policy: the Rust watchdog flips this with the herd's busy state so the CPU is
+  // pinned only while agents actually work (delivered as a re-start so the notification and
+  // the lock update together in onStartCommand).
+  @JvmStatic @Keep
+  fun setActive(active: Boolean) {
+    val ctx = appContext ?: return
+    val intent = Intent(ctx, PocketService::class.java).putExtra("active", active)
+    if (Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(intent) else ctx.startService(intent)
+  }
+
   @JvmStatic @Keep private external fun nativeInit()
 }
