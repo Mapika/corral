@@ -26,6 +26,11 @@
     busy = true; error = '';
     try {
       await startPocket();
+      // Best-effort: the foreground service's notification needs POST_NOTIFICATIONS on 13+.
+      try {
+        const { isPermissionGranted, requestPermission } = await import('@tauri-apps/plugin-notification');
+        if (!(await isPermissionGranted())) await requestPermission();
+      } catch (e) {}
       onPaired?.();
     } catch (e) {
       error = 'Could not start the on-device backend' + (e?.message ? ' — ' + e.message : '.');

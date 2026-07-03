@@ -676,6 +676,7 @@ version = "0.5.0"
 dependencies = [
  "flate2",
  "hex",
+ "jni",
  "libc",
  "log",
  "rand 0.8.6",

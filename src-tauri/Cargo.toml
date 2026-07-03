@@ -49,3 +49,4 @@ hex = "0.4"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 tar = "0.4"
 libc = "0.2"
+jni = "0.21"

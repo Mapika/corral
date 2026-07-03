@@ -112,6 +112,41 @@ jobs:
           }
           EOF
 
+      # Foreground service (pocket only): keeps the app process un-cached so the phantom-process
+      # killer leaves the node child alone during long runs. The .kt sources are committed under
+      # src-tauri/android/; MainActivity gets the one-line bridge init (the template class is
+      # body-less — fail loudly if that ever changes); the manifest gains the specialUse service
+      # and its permissions.
+      - name: Inject the pocket foreground service
+        if: matrix.flavor == 'pocket'
+        run: |
+          set -euo pipefail
+          MAIN=$(find src-tauri/gen/android -name MainActivity.kt)
+          [ -n "$MAIN" ] || { echo 'MainActivity.kt not found'; exit 1; }
+          cp src-tauri/android/PocketService.kt src-tauri/android/PocketBridge.kt "$(dirname "$MAIN")/"
+          python3 - "$MAIN" <<'EOF'
+          import re, sys
+          p = sys.argv[1]; s = open(p).read()
+          body = '''class MainActivity : TauriActivity() {
+            override fun onCreate(savedInstanceState: android.os.Bundle?) {
+              super.onCreate(savedInstanceState)
+              try { PocketBridge.init(applicationContext) } catch (e: Throwable) {
+                android.util.Log.w("PocketBridge", "init failed: " + e)
+              }
+            }
+          }'''
+          s2 = re.sub(r'class MainActivity\s*:\s*TauriActivity\(\)\s*(\{\s*\})?\s*$', body, s, flags=re.M)
+          if s2 == s:
+              raise SystemExit('MainActivity pattern not found - tauri template changed?')
+          open(p, 'w').write(s2)
+          print(s2)
+          EOF
+          MANIFEST=src-tauri/gen/android/app/src/main/AndroidManifest.xml
+          sed -i 's#<uses-permission android:name="android.permission.INTERNET" */>#<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />#' "$MANIFEST"
+          sed -i 's#</application>#    <service\n            android:name=".PocketService"\n            android:exported="false"\n            android:foregroundServiceType="specialUse">\n            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="On-device coding agent backend" />\n        </service>\n    </application>#' "$MANIFEST"
+          grep -q PocketService "$MANIFEST" || { echo 'service injection failed'; exit 1; }
+          cat "$MANIFEST"
+
       - name: Build the APK (arm64)
         run: |
           export NDK_HOME="$ANDROID_NDK_LATEST_HOME"

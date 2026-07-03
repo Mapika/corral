@@ -14,7 +14,7 @@
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 const PAYLOAD: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pocket-payload.tar.gz"));
 const PAYLOAD_SHA: &str = include_str!(concat!(env!("OUT_DIR"), "/pocket-payload.sha"));
@@ -32,6 +32,38 @@ pub struct PocketInfo {
     running: bool,
     port: u16,
     token: String,
+}
+
+// --- foreground service bridge ---
+// PocketBridge.init (called from the CI-patched MainActivity, pocket flavor only) lands in
+// nativeInit below with a JNIEnv; we keep the VM + a global ref to the class so start/stop can
+// call back into Kotlin from any thread. Slim builds never call init — BRIDGE stays empty and
+// fgs() is a no-op, matching the rest of pocket being dormant there.
+struct Bridge {
+    vm: jni::JavaVM,
+    cls: jni::objects::GlobalRef,
+}
+static BRIDGE: OnceLock<Bridge> = OnceLock::new();
+
+#[no_mangle]
+pub extern "system" fn Java_io_github_mapika_corral_PocketBridge_nativeInit(
+    env: jni::JNIEnv,
+    class: jni::objects::JClass,
+) {
+    let Ok(vm) = env.get_java_vm() else { return };
+    let Ok(cls) = env.new_global_ref(&class) else { return };
+    let _ = BRIDGE.set(Bridge { vm, cls });
+}
+
+// Keep the app process un-cached while the backend runs (phantom-process killer protection).
+fn fgs(method: &'static str) {
+    let Some(b) = BRIDGE.get() else { return };
+    let Ok(mut env) = b.vm.attach_current_thread() else { return };
+    let cls = unsafe { jni::objects::JClass::from_raw(b.cls.as_raw()) };
+    if env.call_static_method(&cls, method, "()V", &[]).is_err() {
+        let _ = env.exception_clear();
+        log::warn!("PocketBridge.{method} failed");
+    }
 }
 
 // nativeLibraryDir without JNI: the app's own cdylib (libapp_lib.so) is extracted to and loaded
@@ -216,6 +248,7 @@ pub async fn pocket_start(app: tauri::AppHandle) -> Result<PocketInfo, String> {
         let run = spawn_backend(&root, &native)?;
         let info = PocketInfo { running: true, port: run.port, token: run.token.clone() };
         *guard = Some(run);
+        fgs("startService");
         Ok(info)
     })
     .await
@@ -245,4 +278,5 @@ pub fn pocket_stop(app: tauri::AppHandle) {
     if let Ok(root) = pocket_root(&app) {
         let _ = std::fs::remove_file(root.join("run.pid"));
     }
+    fgs("stopService");
 }
