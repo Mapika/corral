@@ -12,6 +12,7 @@
 # symlinks at first run.
 set -euo pipefail
 
+CURL=(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2)
 REPO=https://packages.termux.dev/apt/termux-main
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RT="$ROOT/src-tauri/pocket/runtime"
@@ -26,7 +27,7 @@ SKIP="termux-tools termux-am termux-exec termux-keyring termux-licenses ca-certi
 rm -rf "$RT" "$WORK"
 mkdir -p "$JNI" "$WORK/x"
 
-curl -fsSL "$REPO/dists/stable/main/binary-aarch64/Packages" -o "$WORK/Packages"
+"${CURL[@]}" "$REPO/dists/stable/main/binary-aarch64/Packages" -o "$WORK/Packages"
 
 field() { # <pkg> <field> -> value
   awk -v RS= -v p="$1" '$1=="Package:" && $2==p {print; exit}' "$WORK/Packages" \
@@ -44,7 +45,7 @@ while ((${#queue[@]})); do
   fn="$(field "$pkg" Filename)"
   if [[ -z "$fn" ]]; then echo "WARN: package '$pkg' not found in index"; continue; fi
   echo "fetch: $pkg  ($fn)"
-  curl -fsSL "$REPO/$fn" -o "$WORK/$pkg.deb"
+  "${CURL[@]}" "$REPO/$fn" -o "$WORK/$pkg.deb"
   mkdir -p "$WORK/x/$pkg"
   dpkg-deb -x "$WORK/$pkg.deb" "$WORK/x/$pkg"
   while IFS= read -r dep; do
@@ -93,17 +94,17 @@ done
 # The npm package is a platform-binary installer these days; none of its optionalDeps match
 # android, so we ship the linux-arm64-musl binary in the APK and exec it through Alpine's musl
 # loader (its PT_INTERP /lib/ld-musl-* does not exist on Android).
-CLAUDE_TGZ_URL="$(curl -fsSL https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64-musl/latest | jq -r .dist.tarball)"
+CLAUDE_TGZ_URL="$("${CURL[@]}" https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64-musl/latest | jq -r .dist.tarball)"
 echo "fetch: claude-code ($CLAUDE_TGZ_URL)"
-curl -fsSL "$CLAUDE_TGZ_URL" -o "$WORK/claude-musl.tgz"
+"${CURL[@]}" "$CLAUDE_TGZ_URL" -o "$WORK/claude-musl.tgz"
 tar -xzf "$WORK/claude-musl.tgz" -C "$WORK" package/claude
 cp "$WORK/package/claude" "$JNI/libclaude_exec.so"
 echo "bin claude libclaude_exec.so" >>"$MAP"
 
 ALPINE_BASE=https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/aarch64
-ALPINE_FILE="$(curl -fsSL "$ALPINE_BASE/latest-releases.yaml" | grep -m1 'file: alpine-minirootfs' | awk '{print $2}')"
+ALPINE_FILE="$("${CURL[@]}" "$ALPINE_BASE/latest-releases.yaml" | grep -m1 'file: alpine-minirootfs' | awk '{print $2}')"
 echo "fetch: musl loader ($ALPINE_FILE)"
-curl -fsSL "$ALPINE_BASE/$ALPINE_FILE" -o "$WORK/alpine.tar.gz"
+"${CURL[@]}" "$ALPINE_BASE/$ALPINE_FILE" -o "$WORK/alpine.tar.gz"
 tar -xzf "$WORK/alpine.tar.gz" -C "$WORK" --wildcards '*ld-musl-aarch64.so.1'
 cp "$WORK"/lib/ld-musl-aarch64.so.1 "$JNI/libldmusl_exec.so"
 echo "bin ld-musl libldmusl_exec.so" >>"$MAP"
