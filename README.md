@@ -133,4 +133,4 @@ data dir keep working.)
 
 ## License
 
-MIT
+[MIT](LICENSE) © Mark Marosi ([@Mapika](https://github.com/Mapika))
