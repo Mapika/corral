@@ -25,6 +25,16 @@ import { launchDefaultsFor, parseLaunchDefaults, rememberLaunchDefaults, seriali
   assert.ok(launchDefaultsFor(map, 'local', '/p44'));                        // newest kept
 }
 
+// ranch scoping: same dir on two ranches remembers different combos; pre-0.6 unscoped entries
+// still resolve as the fallback when a ranch-scoped one doesn't exist yet
+{
+  let map = rememberLaunchDefaults({}, { host: 'local', dir: '/app', agent: 'codex', now: 1 });          // legacy
+  map = rememberLaunchDefaults(map, { ranch: 'r1', host: 'local', dir: '/app', agent: 'claude', perm: 'plan', now: 2 });
+  assert.equal(launchDefaultsFor(map, 'local', '/app', 'r1').perm, 'plan');
+  assert.equal(launchDefaultsFor(map, 'local', '/app', 'r2').agent, 'codex');  // falls back to legacy
+  assert.equal(launchDefaultsFor(map, 'local', '/app').agent, 'codex');        // unscoped lookup unaffected
+}
+
 // hostile storage shapes
 assert.deepEqual(parseLaunchDefaults('not json'), {});
 assert.deepEqual(parseLaunchDefaults('[1,2]'), {});

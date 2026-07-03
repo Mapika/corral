@@ -71,6 +71,27 @@ function parsesStorageDefensively() {
   assert.equal(serializeRecentRoots([{ host: 'local', dir: '/x', ts: 10 }]), '[{"host":"local","dir":"/x","ts":10}]');
 }
 
+function separatesRanchesButLetsUntaggedMatchAnywhere() {
+  // Same dir on two ranches = two stored entries; an untagged (pre-0.6) entry is a third.
+  let roots = rememberLaunchRoot([], { ranch: 'r1', host: 'local', dir: '/work/app', ts: 100 });
+  roots = rememberLaunchRoot(roots, { ranch: 'r2', host: 'local', dir: '/work/app', ts: 200 });
+  roots = rememberLaunchRoot(roots, { host: 'local', dir: '/legacy/app', ts: 50 });
+  assert.equal(roots.length, 3);
+  assert.deepEqual(parseRecentRoots(serializeRecentRoots(roots)), roots);   // ranch tag survives storage
+
+  // Filtering for r1: its own entry + the untagged one; r2's stays out.
+  const forR1 = recentRootsForHost({ ranch: 'r1', host: 'local', roots, sessions: [] });
+  assert.deepEqual(forR1.map((r) => r.dir), ['/work/app', '/legacy/app']);
+
+  // Ranch-tagged sessions filter the same way, and same-dir rows collapse across tag styles.
+  const merged = recentRootsForHost({
+    ranch: 'r1', host: 'local',
+    roots: [{ host: 'local', dir: '/work/app', ts: 100 }],
+    sessions: [{ ranch: 'r1', host: 'local', cwd: '/work/app', updatedAt: 300 }, { ranch: 'r2', host: 'local', cwd: '/other', updatedAt: 900 }],
+  });
+  assert.deepEqual(merged.map((r) => [r.dir, r.source]), [['/work/app', 'session']]);
+}
+
 remembersAndNormalizesRoots();
 dedupesByHostAndPath();
 cleansExistingListWhenNewRootInvalid();
@@ -78,5 +99,6 @@ separatesHosts();
 blendsStoredAndSessionRoots();
 keepsRecentSourceOnTimestampTie();
 parsesStorageDefensively();
+separatesRanchesButLetsUntaggedMatchAnywhere();
 
 console.log('recentRoots tests ok');

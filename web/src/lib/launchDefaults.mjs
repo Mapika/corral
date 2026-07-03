@@ -5,7 +5,9 @@
 export const LAUNCH_DEFAULTS_KEY = 'corral-launch-defaults';
 const CAP = 40;
 
-const keyOf = (host, dir) => (host || 'local') + '\0' + String(dir || '');
+// Optional ranch prefix scopes a project to the paired server it lives on; keys without one are
+// the pre-0.6 format and still resolve as a fallback, so nobody loses their remembered combos.
+const keyOf = (host, dir, ranch) => (ranch ? ranch + '\0' : '') + (host || 'local') + '\0' + String(dir || '');
 
 export function parseLaunchDefaults(raw) {
   try {
@@ -16,16 +18,16 @@ export function parseLaunchDefaults(raw) {
   }
 }
 
-export function launchDefaultsFor(map, host, dir) {
-  const d = map[keyOf(host, dir)];
+export function launchDefaultsFor(map, host, dir, ranch) {
+  const d = map[keyOf(host, dir, ranch)] || (ranch ? map[keyOf(host, dir)] : null);
   if (!d || typeof d !== 'object') return null;
   return { agent: d.agent || 'claude', perm: d.perm || 'auto', model: d.model || null, worktree: !!d.worktree };
 }
 
 // Returns a NEW map with the entry remembered and the oldest entries dropped past the cap.
-export function rememberLaunchDefaults(map, { host, dir, agent, perm, model, worktree, now = Date.now() } = {}) {
+export function rememberLaunchDefaults(map, { ranch, host, dir, agent, perm, model, worktree, now = Date.now() } = {}) {
   const next = { ...map };
-  next[keyOf(host, dir)] = { agent: agent || 'claude', perm: perm || 'auto', model: model || null, worktree: !!worktree, ts: now };
+  next[keyOf(host, dir, ranch)] = { agent: agent || 'claude', perm: perm || 'auto', model: model || null, worktree: !!worktree, ts: now };
   const keys = Object.keys(next);
   if (keys.length > CAP) {
     keys.sort((a, b) => (next[a].ts || 0) - (next[b].ts || 0));
