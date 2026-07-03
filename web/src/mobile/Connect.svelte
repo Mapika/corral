@@ -4,6 +4,7 @@
   // persisting, so a bad link never strands the app.
   import { setServer, setToken } from '../lib/api.js';
   import { requestJson } from '../lib/apiRequest.mjs';
+  import { pocketAvailable, startPocket } from '../lib/pocket.js';
   import { parsePairInput, SERVER_KEY, TOKEN_KEY } from '../lib/serverBase.mjs';
 
   let { onPaired } = $props();
@@ -16,6 +17,22 @@
   let stream = null, scanTimer = null;
 
   const canScan = typeof BarcodeDetector !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
+
+  // Pocket builds carry an on-device runtime — offer "Run on this phone" above pairing.
+  let pocketOk = $state(false);
+  $effect(() => { pocketAvailable().then((ok) => (pocketOk = ok)); });
+
+  async function runLocal() {
+    busy = true; error = '';
+    try {
+      await startPocket();
+      onPaired?.();
+    } catch (e) {
+      error = 'Could not start the on-device backend' + (e?.message ? ' — ' + e.message : '.');
+    } finally {
+      busy = false;
+    }
+  }
 
   async function connect(text) {
     const { base, token } = parsePairInput(text);
@@ -89,6 +106,10 @@
     </div>
   {:else}
     <div class="form">
+      {#if pocketOk}
+        <button class="scan" onclick={runLocal} disabled={busy}>{busy ? 'Starting…' : 'Run on this phone'}</button>
+        <div class="or"><span>or</span></div>
+      {/if}
       {#if canScan}
         <button class="scan" onclick={startScan}>Scan the QR</button>
         <div class="or"><span>or</span></div>

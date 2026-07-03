@@ -4,6 +4,7 @@ import './app.css';
 import './prose.css';
 import Root from './Root.svelte';
 import { setServer, setToken } from './lib/api.js';
+import { pocketEnabled, startPocket } from './lib/pocket.js';
 import { isLoopbackPage, isStandaloneShell, normalizeBase, SERVER_KEY, TOKEN_KEY } from './lib/serverBase.mjs';
 
 // Where the auth comes from, by how this page is running:
@@ -22,9 +23,17 @@ async function boot() {
     if (!loopback && !standalone) { try { localStorage.setItem(TOKEN_KEY, m[1]); } catch (e) {} }
     history.replaceState(null, '', location.pathname + location.search);
   } else if (standalone) {
-    let base = '', token = '';
-    try { base = normalizeBase(localStorage.getItem(SERVER_KEY)); token = localStorage.getItem(TOKEN_KEY) || ''; } catch (e) {}
-    if (base && token) { setServer(base); setToken(token); paired = true; }
+    // Pocket mode first: the on-device backend's token is per-run, so it's re-minted here every
+    // launch (never read from storage). A failed start falls through to Connect, which offers
+    // the button again alongside classic pairing.
+    if (pocketEnabled()) {
+      try { await startPocket(); paired = true; } catch (e) {}
+    }
+    if (!paired) {
+      let base = '', token = '';
+      try { base = normalizeBase(localStorage.getItem(SERVER_KEY)); token = localStorage.getItem(TOKEN_KEY) || ''; } catch (e) {}
+      if (base && token) { setServer(base); setToken(token); paired = true; }
+    }
   } else if (!loopback) {
     let token = '';
     try { token = localStorage.getItem(TOKEN_KEY) || ''; } catch (e) {}

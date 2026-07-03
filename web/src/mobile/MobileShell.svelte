@@ -4,6 +4,7 @@
   import { getServer, getWebPush, resumeSession, testWebPush, webPushSubscribe, webPushUnsubscribe } from '../lib/api.js';
   import { applicationServerKeyBytes, subscriptionParams } from '../lib/webPushClient.mjs';
   import { releaseUpdate, sessionFromDeepLink } from '../lib/appUpdate.mjs';
+  import { clearPocket, pocketEnabled, stopPocket } from '../lib/pocket.js';
   import { SERVER_KEY, TOKEN_KEY } from '../lib/serverBase.mjs';
   import { isResumableSession } from '../lib/operatorStatus.mjs';
   import Icon from '../lib/Icon.svelte';
@@ -178,9 +179,11 @@
     }
     chat = chatDesc(next);
   }
+  const pocketOn = pocketEnabled();
   function unpair() {
     try { localStorage.removeItem(SERVER_KEY); localStorage.removeItem(TOKEN_KEY); } catch (e) {}
-    location.reload();
+    clearPocket();
+    stopPocket().finally(() => location.reload());
   }
 </script>
 
@@ -244,7 +247,7 @@
       <Sheet onclose={() => (settingsOpen = false)} label="Settings">
         <div class="settings">
           <h2>Connection</h2>
-          <p class="kv"><span>Server</span><code>{getServer() || 'this device'}</code></p>
+          <p class="kv"><span>Server</span><code>{pocketOn ? 'this phone' : getServer() || 'this device'}</code></p>
           <p class="kv"><span>Stream</span><code>{data.d.live ? 'live' : data.d.offline ? 'offline' : 'polling'}</code></p>
           {#if data.d.error}<p class="errline">{data.d.error}</p>{/if}
           {#if !standalone}
@@ -265,7 +268,7 @@
             {#if notif.note}<p class="hint">{notif.note}</p>{/if}
           {/if}
           {#if standalone}
-            <button class="unpair" onclick={unpair}>Unpair from this server</button>
+            <button class="unpair" onclick={unpair}>{pocketOn ? 'Stop running on this phone' : 'Unpair from this server'}</button>
             <h2 class="apph">App</h2>
             <p class="kv"><span>Version</span><code>v{VERSION}</code></p>
             <button class="unpair checkupd" onclick={checkUpdate} disabled={update?.checking}>{update?.checking ? 'checking…' : 'Check for updates'}</button>
