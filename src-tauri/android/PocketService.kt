@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 
 // Foreground service for pocket mode: keeps the app process out of the cached state while the
 // on-device backend runs, so Android's phantom-process killer leaves the node child alone
@@ -19,6 +20,11 @@ import android.os.IBinder
 // Committed under src-tauri/android/ and copied into the generated project by CI (pocket flavor
 // only) — `tauri android init` regenerates gen/android from templates on every build.
 class PocketService : Service() {
+  // The FGS keeps the process un-cached but not the CPU awake: under Doze a long screen-off agent
+  // run stalls mid-inference. Held only while the backend runs (acquired here, released in
+  // onDestroy) — the battery cost is scoped to "agents are actually working".
+  private var wakeLock: PowerManager.WakeLock? = null
+
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onCreate() {
@@ -43,7 +49,18 @@ class PocketService : Service() {
     } else {
       startForeground(1, n)
     }
+    if (wakeLock == null) {
+      wakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
+        .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "corral:pocket")
+        .apply { setReferenceCounted(false); acquire() }
+    }
     return START_STICKY
+  }
+
+  override fun onDestroy() {
+    wakeLock?.release()
+    wakeLock = null
+    super.onDestroy()
   }
 
   companion object {

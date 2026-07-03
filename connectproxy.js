@@ -39,6 +39,19 @@ function startConnectProxy({ port, bind = '127.0.0.1' } = {}) {
     up.on('error', () => sock.destroy());
     sock.on('error', () => up.destroy());
   });
+  // A listen failure here silently killed all agent DNS (an http.Server 'error' with no handler
+  // throws into the backend's uncaughtException keep-alive). The caller probes for a free port,
+  // so a conflict is a rare race — retry the same port a few times, then say plainly it's down.
+  let attempts = 0;
+  srv.on('error', (e) => {
+    if (e.code === 'EADDRINUSE' && attempts < 5) {
+      attempts += 1;
+      console.error(`[proxy] port ${port} busy — retrying (${attempts}/5)`);
+      setTimeout(() => srv.listen(port, bind), 1000);
+    } else {
+      console.error(`[proxy] listen failed: ${e.message} — agent DNS is DOWN`);
+    }
+  });
   srv.listen(port, bind, () => console.log(`connect proxy on http://${bind}:${port} (443-only)`));
   return srv;
 }

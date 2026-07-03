@@ -18,13 +18,50 @@ use std::sync::{Mutex, OnceLock};
 
 const PAYLOAD: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pocket-payload.tar.gz"));
 const PAYLOAD_SHA: &str = include_str!(concat!(env!("OUT_DIR"), "/pocket-payload.sha"));
+// Preferred CONNECT-proxy port; probed at spawn — if another app squats it, an ephemeral port
+// is used instead (a silently missing proxy would kill all agent DNS).
 const DNS_PROXY_PORT: u16 = 8899;
 
 pub struct Pocket(pub Mutex<Option<Run>>);
 pub struct Run {
-    child: Child,
+    // None = adopted: the backend outlived a previous app process (Android killed us without
+    // callbacks) and was re-attached by health check instead of being reaped — it is not our
+    // child, so process control goes through `pid`.
+    child: Option<Child>,
+    pid: u32,
     port: u16,
     token: String,
+    proxy_port: u16,
+}
+
+impl Run {
+    fn alive(&mut self) -> bool {
+        match self.child.as_mut() {
+            Some(c) => c.try_wait().ok().flatten().is_none(),
+            None => backend_alive(self.port, &self.token),
+        }
+    }
+    fn info(&self) -> PocketInfo {
+        PocketInfo { running: true, port: self.port, token: self.token.clone() }
+    }
+}
+
+// Persisted next to the backend so a later app process can find (and adopt) a backend that
+// survived us. App-private dir, so the token is no more exposed than the credentials next to it.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RunFile {
+    pid: u32,
+    port: u16,
+    token: String,
+    proxy_port: u16,
+}
+
+fn run_file(root: &Path) -> PathBuf {
+    root.join("run.json")
+}
+
+fn load_run_file(root: &Path) -> Option<RunFile> {
+    serde_json::from_str(&std::fs::read_to_string(run_file(root)).ok()?).ok()
 }
 
 // In-flight `claude auth login` (OAuth manual paste-back): child + its accumulated output +
@@ -137,17 +174,51 @@ fn link_runtime(root: &Path, native: &Path) -> Result<(PathBuf, PathBuf), String
     Ok((bin, lib))
 }
 
-// A previous app process may have left its node running (Android kills us without callbacks),
-// and server.js's single-instance guard would then make the fresh spawn exit on EADDRINUSE.
-fn reap_stale(root: &Path) {
-    if let Ok(s) = std::fs::read_to_string(root.join("run.pid")) {
-        if let Ok(pid) = s.trim().parse::<i32>() {
-            unsafe {
-                libc::kill(pid, libc::SIGTERM);
-            }
+// SIGTERM with a short grace period, then SIGKILL — a half-dead node still holding its port
+// would EADDRINUSE the fresh spawn (server.js's single-instance guard makes it exit).
+fn kill_pid(pid: u32) {
+    let pid = pid as i32;
+    if unsafe { libc::kill(pid, libc::SIGTERM) } != 0 {
+        return; // already gone
+    }
+    for _ in 0..20 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if unsafe { libc::kill(pid, 0) } != 0 {
+            return;
         }
     }
-    let _ = std::fs::remove_file(root.join("run.pid"));
+    unsafe {
+        libc::kill(pid, libc::SIGKILL);
+    }
+}
+
+// Kill a leftover backend that adoption declined (dead, or unhealthy enough to fail the check).
+fn reap_stale(root: &Path) {
+    if let Some(prev) = load_run_file(root) {
+        kill_pid(prev.pid);
+    }
+    let _ = std::fs::remove_file(run_file(root));
+}
+
+// Cheap loopback health check: authenticated GET against the roster endpoint. Decides between
+// adopting a surviving backend and spawning fresh; the watchdog uses it for adopted runs too.
+fn backend_alive(port: u16, token: &str) -> bool {
+    use std::io::Write;
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let Ok(mut s) = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(800)) else {
+        return false;
+    };
+    let _ = s.set_write_timeout(Some(std::time::Duration::from_millis(800)));
+    let _ = s.set_read_timeout(Some(std::time::Duration::from_millis(2000)));
+    let req = format!(
+        "GET /api/chat/list HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n"
+    );
+    if s.write_all(req.as_bytes()).is_err() {
+        return false;
+    }
+    let mut buf = [0u8; 32];
+    let Ok(n) = s.read(&mut buf) else { return false };
+    String::from_utf8_lossy(&buf[..n]).starts_with("HTTP/1.1 200")
 }
 
 fn gen_token() -> String {
@@ -157,15 +228,15 @@ fn gen_token() -> String {
     hex::encode(b)
 }
 
-fn choose_port() -> u16 {
-    for p in [7878u16, 0] {
+fn free_port(prefer: u16) -> u16 {
+    for p in [prefer, 0] {
         if let Ok(l) = std::net::TcpListener::bind(("127.0.0.1", p)) {
             if let Ok(a) = l.local_addr() {
                 return a.port();
             }
         }
     }
-    7878
+    prefer
 }
 
 // Keep node's stdio flowing (it blocks on a full pipe) and surface it in logcat.
@@ -202,7 +273,10 @@ fn spawn_backend(root: &Path, native: &Path) -> Result<Run, String> {
     std::fs::create_dir_all(home.join("projects")).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
     reap_stale(root);
-    let port = choose_port();
+    let port = free_port(7878);
+    // The proxy port is probed too — 8899 hardcoded meant any other app squatting it silently
+    // killed all agent DNS (musl can't resolve without the proxy).
+    let proxy_port = free_port(DNS_PROXY_PORT);
     let token = gen_token();
     let s = |p: &Path| p.to_string_lossy().into_owned();
     let mut cmd = Command::new(native.join("libnode_exec.so"));
@@ -213,15 +287,18 @@ fn spawn_backend(root: &Path, native: &Path) -> Result<Run, String> {
         .env("CORRAL_TOKEN", &token)
         .env("CORRAL_CLAUDE_BIN", s(&rt_bin.join("claude")))
         .env("CORRAL_EXEC_LOADER", s(&rt_bin.join("ld-musl")))
-        .env("CORRAL_DNS_PROXY_PORT", DNS_PROXY_PORT.to_string())
-        .env("CORRAL_AGENT_HTTPS_PROXY", format!("http://127.0.0.1:{DNS_PROXY_PORT}"));
+        .env("CORRAL_DNS_PROXY_PORT", proxy_port.to_string())
+        .env("CORRAL_AGENT_HTTPS_PROXY", format!("http://127.0.0.1:{proxy_port}"));
     apply_runtime_env(&mut cmd, root, native);
     let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("spawn node: {e}"))?;
-    let _ = std::fs::write(root.join("run.pid"), child.id().to_string());
+    let pid = child.id();
+    // Written before the listen wait so even a start that dies mid-boot leaves a reapable record.
+    let run_record = RunFile { pid, port, token: token.clone(), proxy_port };
+    let _ = std::fs::write(run_file(root), serde_json::to_string(&run_record).unwrap_or_default());
     drain(child.stdout.take(), "pocket");
     drain(child.stderr.take(), "pocket!");
     // Wait for the listener before handing the base URL to the webview (desktop sidecar pattern).
@@ -235,9 +312,10 @@ fn spawn_backend(root: &Path, native: &Path) -> Result<Run, String> {
     }
     if !up {
         let _ = child.kill();
+        let _ = std::fs::remove_file(run_file(root));
         return Err("backend did not start listening within 15s".into());
     }
-    Ok(Run { child, port, token })
+    Ok(Run { child: Some(child), pid, port, token, proxy_port })
 }
 
 // Like drain(), but also accumulates lines for the login flow (the OAuth URL + status text).
@@ -262,9 +340,11 @@ pub async fn pocket_login(app: tauri::AppHandle) -> Result<String, String> {
         use tauri::Manager;
         let native = native_library_dir().ok_or("pocket runtime not present in this build")?;
         let root = pocket_root(&app)?;
-        if app.state::<Pocket>().0.lock().unwrap().is_none() {
-            return Err("start the on-device backend first".into());
-        }
+        // The login child's DNS rides the live backend's CONNECT proxy — grab its actual port.
+        let proxy_port = match app.state::<Pocket>().0.lock().unwrap().as_ref() {
+            Some(run) => run.proxy_port,
+            None => return Err("start the on-device backend first".into()),
+        };
         let state = app.state::<PocketLogin>();
         if let Some(mut old) = state.0.lock().unwrap().take() {
             let _ = old.child.kill();
@@ -275,8 +355,8 @@ pub async fn pocket_login(app: tauri::AppHandle) -> Result<String, String> {
         cmd.arg(rt_bin.join("claude"))
             .args(["auth", "login", "--claudeai"])
             .current_dir(root.join("home"))
-            .env("HTTPS_PROXY", format!("http://127.0.0.1:{DNS_PROXY_PORT}"))
-            .env("HTTP_PROXY", format!("http://127.0.0.1:{DNS_PROXY_PORT}"));
+            .env("HTTPS_PROXY", format!("http://127.0.0.1:{proxy_port}"))
+            .env("HTTP_PROXY", format!("http://127.0.0.1:{proxy_port}"));
         apply_runtime_env(&mut cmd, &root, &native);
         let mut child = cmd
             .stdin(Stdio::piped())
@@ -348,8 +428,74 @@ pub fn pocket_available() -> bool {
     native_library_dir().map(|d| d.join("libnode_exec.so").exists()).unwrap_or(false)
 }
 
-// Idempotent: a live backend is returned as-is (its token belongs to this app run). First run
-// extracts the payload (~seconds), so the blocking work stays off the main thread.
+// Login probe for the UI: claude's OAuth flow drops credentials in the app-private HOME. A file
+// check, not `claude auth status` — spawning the musl binary for every settings-open is heavy,
+// and an expired token still surfaces properly at run time.
+#[tauri::command]
+pub fn pocket_logged_in(app: tauri::AppHandle) -> bool {
+    pocket_root(&app)
+        .map(|r| r.join("home/.claude/.credentials.json").is_file())
+        .unwrap_or(false)
+}
+
+// Supervise the backend: notice node dying (crash, OOM, HyperOS killing sprees), restart it with
+// a short backoff, and tell the webview over the `pocket-state` event so it rewires to the new
+// port/token. One watchdog per app process; it retires when pocket_stop cleared the state on
+// purpose, or when restarting stopped working (then the FGS notification comes down too — it
+// must not claim "agents keep working" over a dead backend).
+fn start_watchdog(app: tauri::AppHandle) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static RUNNING: AtomicBool = AtomicBool::new(false);
+    if RUNNING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(move || {
+        use tauri::{Emitter, Manager};
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            let state = app.state::<Pocket>();
+            let mut guard = state.0.lock().unwrap();
+            let Some(run) = guard.as_mut() else { break }; // stopped on purpose
+            if run.alive() {
+                continue;
+            }
+            log::warn!("pocket backend died — restarting");
+            *guard = None;
+            drop(guard);
+            let _ = app.emit("pocket-state", PocketInfo { running: false, port: 0, token: String::new() });
+            let mut revived = false;
+            for delay in [1u64, 3, 9] {
+                std::thread::sleep(std::time::Duration::from_secs(delay));
+                if app.state::<Pocket>().0.lock().unwrap().is_some() {
+                    revived = true; // a concurrent pocket_start beat us to it
+                    break;
+                }
+                let Some(native) = native_library_dir() else { break };
+                let Ok(root) = pocket_root(&app) else { break };
+                match spawn_backend(&root, &native) {
+                    Ok(run) => {
+                        let info = run.info();
+                        *app.state::<Pocket>().0.lock().unwrap() = Some(run);
+                        let _ = app.emit("pocket-state", info);
+                        revived = true;
+                        break;
+                    }
+                    Err(e) => log::warn!("pocket restart failed: {e}"),
+                }
+            }
+            if !revived {
+                fgs("stopService");
+                break;
+            }
+        }
+        RUNNING.store(false, Ordering::SeqCst);
+    });
+}
+
+// Idempotent: a live backend is returned as-is (its token belongs to this app run). A backend
+// that survived a previous app process is adopted by health check — killing it would throw away
+// its running sessions. First run extracts the payload (~seconds), so the blocking work stays
+// off the main thread.
 #[tauri::command]
 pub async fn pocket_start(app: tauri::AppHandle) -> Result<PocketInfo, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -362,14 +508,25 @@ pub async fn pocket_start(app: tauri::AppHandle) -> Result<PocketInfo, String> {
         let state = app.state::<Pocket>();
         let mut guard = state.0.lock().unwrap();
         if let Some(run) = guard.as_mut() {
-            if run.child.try_wait().ok().flatten().is_none() {
-                return Ok(PocketInfo { running: true, port: run.port, token: run.token.clone() });
+            if run.alive() {
+                return Ok(run.info());
             }
         }
-        let run = spawn_backend(&root, &native)?;
-        let info = PocketInfo { running: true, port: run.port, token: run.token.clone() };
+        let run = match load_run_file(&root) {
+            Some(prev) if backend_alive(prev.port, &prev.token) => {
+                log::info!("adopting surviving pocket backend (pid {}, port {})", prev.pid, prev.port);
+                Run { child: None, pid: prev.pid, port: prev.port, token: prev.token, proxy_port: prev.proxy_port }
+            }
+            _ => {
+                reap_stale(&root);
+                spawn_backend(&root, &native)?
+            }
+        };
+        let info = run.info();
         *guard = Some(run);
+        drop(guard);
         fgs("startService");
+        start_watchdog(app.clone());
         Ok(info)
     })
     .await
@@ -377,27 +534,40 @@ pub async fn pocket_start(app: tauri::AppHandle) -> Result<PocketInfo, String> {
 }
 
 #[tauri::command]
-pub fn pocket_status(app: tauri::AppHandle) -> PocketInfo {
-    use tauri::Manager;
-    let state = app.state::<Pocket>();
-    let mut guard = state.0.lock().unwrap();
-    if let Some(run) = guard.as_mut() {
-        if run.child.try_wait().ok().flatten().is_none() {
-            return PocketInfo { running: true, port: run.port, token: run.token.clone() };
+pub async fn pocket_status(app: tauri::AppHandle) -> PocketInfo {
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Manager;
+        let state = app.state::<Pocket>();
+        let mut guard = state.0.lock().unwrap();
+        if let Some(run) = guard.as_mut() {
+            if run.alive() {
+                return run.info();
+            }
         }
-    }
-    PocketInfo { running: false, port: 0, token: String::new() }
+        PocketInfo { running: false, port: 0, token: String::new() }
+    })
+    .await
+    .unwrap_or(PocketInfo { running: false, port: 0, token: String::new() })
 }
 
 #[tauri::command]
-pub fn pocket_stop(app: tauri::AppHandle) {
-    use tauri::Manager;
-    if let Some(mut run) = app.state::<Pocket>().0.lock().unwrap().take() {
-        let _ = run.child.kill();
-        let _ = run.child.wait();
-    }
-    if let Ok(root) = pocket_root(&app) {
-        let _ = std::fs::remove_file(root.join("run.pid"));
-    }
-    fgs("stopService");
+pub async fn pocket_stop(app: tauri::AppHandle) {
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Manager;
+        if let Some(mut run) = app.state::<Pocket>().0.lock().unwrap().take() {
+            match run.child.take() {
+                Some(mut c) => {
+                    let _ = c.kill();
+                    let _ = c.wait();
+                }
+                // Adopted: not our child — signal it directly (SIGTERM, grace, SIGKILL).
+                None => kill_pid(run.pid),
+            }
+        }
+        if let Ok(root) = pocket_root(&app) {
+            let _ = std::fs::remove_file(run_file(&root));
+        }
+        fgs("stopService");
+    })
+    .await;
 }
