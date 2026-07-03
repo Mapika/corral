@@ -45,13 +45,16 @@ function uniqueName(list, name, skipId) {
 
 // Add a pairing to the roster. Re-pairing a base we already know is a token refresh, not a
 // duplicate: same id, same name, new token — the conflict UX is "already paired, key refreshed".
-export function upsertRanch(list, { base, token, name, now = 0, id }) {
+// `taken` carries display names living outside the persisted list (the origin page's ranch, the
+// pocket ranch) so the suffixing sees every name the operator actually sees.
+export function upsertRanch(list, { base, token, name, now = 0, id, taken = [] }) {
   const existing = list.find((r) => r.base === base);
   if (existing) {
     const ranch = { ...existing, token };
     return { list: list.map((r) => (r === existing ? ranch : r)), ranch, refreshed: true };
   }
-  const ranch = { id: id || genId(), name: uniqueName(list, name || defaultRanchName(base)), base, token, addedAt: now };
+  const withTaken = [...list, ...taken.map((n) => ({ id: '\0taken', name: String(n) }))];
+  const ranch = { id: id || genId(), name: uniqueName(withTaken, name || defaultRanchName(base)), base, token, addedAt: now };
   return { list: [...list, ranch], ranch, refreshed: false };
 }
 

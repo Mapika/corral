@@ -38,6 +38,12 @@ assert.deepEqual(parseRanches('not json'), []);
   assert.deepEqual(list.map((r) => r.name), ['desktop', 'desktop 2', 'Desktop 3']);
 }
 
+// names living outside the persisted list (origin/pocket ranches) count as taken too
+{
+  const { ranch } = upsertRanch([], { base: 'http://b:7879', token: 't', name: 'demo-ranch', taken: ['demo-ranch'] });
+  assert.equal(ranch.name, 'demo-ranch 2');
+}
+
 // rename: trims, caps, keeps uniqueness, ignores empties
 {
   let { list } = upsertRanch([], { base: 'http://a:7879', token: 't', name: 'one' });

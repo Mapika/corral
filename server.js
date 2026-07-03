@@ -169,9 +169,11 @@ function insideDir(root, target) {
 // CSP for the served HTML (applies when the Node server serves it — packaged app / `npm start`).
 // script-src is strict 'self' (Vite bundles every dep locally); the only off-origin asset is the
 // Google font. style 'unsafe-inline' is needed for the inline styles in sanitized/streamed HTML.
-// connect-src allows any ws(s) host: the page may be served from a LAN address (phone pairing),
-// so the socket host can't be pinned to loopback. Fetches stay 'self'.
-const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' ws: wss:; frame-src 'self'; object-src 'none'; base-uri 'self'";
+// connect-src allows any host: the page may be served from a LAN address (phone pairing) so the
+// socket host can't be pinned, and a phone page paired with MORE ranches (0.6) fetches the other
+// corral servers directly. ws(s) was always open, so http(s) adds no new exfil channel an XSS
+// didn't already have; each ranch still enforces its own token + Origin allowlist.
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' http: https: ws: wss:; frame-src 'self'; object-src 'none'; base-uri 'self'";
 
 // --- pooled remote exec: one persistent `ssh <host> bash` per host, so file browsing, probes,
 // and file ops pay the ssh handshake once instead of per request. Jobs are serialized per host;
@@ -1115,7 +1117,8 @@ const handleRequest = async (req, res) => {
   if (url.pathname === '/api/hosts') {
     hosts = loadHosts();
     res.setHeader('content-type', 'application/json');
-    return res.end(JSON.stringify({ local: os.homedir().replace(/\\/g, '/'), hosts }));
+    // hostname: what this box calls itself — the phone uses it as the default ranch name.
+    return res.end(JSON.stringify({ local: os.homedir().replace(/\\/g, '/'), hosts, hostname: os.hostname() }));
   }
   if (url.pathname === '/api/chat/list') {
     res.setHeader('content-type', 'application/json');

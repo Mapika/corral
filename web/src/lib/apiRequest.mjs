@@ -91,6 +91,9 @@ export async function requestMutation(path, opts = {}) {
 export function apiErrorMessage(error, fallback = 'Request failed.') {
   const text = String(error?.message || error || '').trim();
   if (!text) return fallback;
+  // The browser's bare network-failure strings carry no useful detail — the caller's fallback
+  // ("Could not reach <ranch>.") says more than "Failed to fetch" ever will.
+  if (/^(failed to fetch|load failed|networkerror)/i.test(text)) return fallback;
   const marker = ' failed: ';
   const index = text.indexOf(marker);
   return index >= 0 ? text.slice(index + marker.length).trim() || fallback : text;

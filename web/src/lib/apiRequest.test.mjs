@@ -132,6 +132,10 @@ function formatsUserFacingApiErrors() {
   );
   assert.equal(apiErrorMessage(new Error('network down'), 'Could not load.'), 'network down');
   assert.equal(apiErrorMessage(null, 'Could not load.'), 'Could not load.');
+  // bare browser network-failure strings say nothing — prefer the caller's fallback
+  assert.equal(apiErrorMessage(new TypeError('Failed to fetch'), 'Could not reach homelab.'), 'Could not reach homelab.');
+  assert.equal(apiErrorMessage(new TypeError('NetworkError when attempting to fetch resource.'), 'Could not reach it.'), 'Could not reach it.');
+  assert.equal(apiErrorMessage(new TypeError('Load failed'), 'Could not reach it.'), 'Could not reach it.');
 }
 
 await retriesTransientFailures();

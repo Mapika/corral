@@ -260,7 +260,7 @@ function addTunnel(url) {
 
 async function handleApi(req, res, url) {
   if (!url.pathname.startsWith('/api/')) return false;
-  if (url.pathname === '/api/hosts') return json(res, { local: 'E:/Projects/terminal-rancher', hosts: ['gpu-box', 'staging', 'build-node'] }), true;
+  if (url.pathname === '/api/hosts') return json(res, { local: 'E:/Projects/terminal-rancher', hosts: ['gpu-box', 'staging', 'build-node'], hostname: 'demo-ranch' }), true;
   if (url.pathname === '/api/servers') return json(res, hostStatuses()), true;
   if (url.pathname === '/api/chat/list') return json(res, sessions()), true;
   if (url.pathname === '/api/chat/launch' && req.method === 'POST') return json(res, { ok: true, id: 'sess-corral' }), true;

@@ -115,14 +115,16 @@ export function createMobileData({ standalone = false } = {}) {
   // Returns { ranch, refreshed } — refreshed means the base was already paired and only the
   // token changed (the conflict UX: no duplicate rows, the existing ranch keeps its identity).
   function addRanch({ base, token, name }) {
-    const { list, ranch, refreshed } = upsertRanch(persisted(), { base, token, name, now: Date.now() });
+    const taken = d.ranches.filter((r) => r.kind !== 'paired').map((r) => r.name);
+    const { list, ranch, refreshed } = upsertRanch(persisted(), { base, token, name, now: Date.now(), taken });
     if (refreshed) {
       const rec = d.ranches.find((r) => r.id === ranch.id);
       if (rec) rec.token = token;
     } else {
-      const rec = { ...ranch, kind: 'paired', ...runtime };
-      d.ranches.push(rec);
-      startConn(rec);
+      d.ranches.push({ ...ranch, kind: 'paired', ...runtime });
+      // connect through the proxy read back from the array — mutations on the raw object are
+      // invisible to the UI (the $state trap that has bitten every list in this app)
+      startConn(d.ranches[d.ranches.length - 1]);
     }
     persist();
     recompute();
@@ -132,9 +134,8 @@ export function createMobileData({ standalone = false } = {}) {
   // Pocket turned on after boot ("Run on this phone" from settings) — join the herd live.
   function attachPocket() {
     if (d.ranches.some((r) => r.kind === 'pocket')) return;
-    const rec = { id: 'pocket', name: 'this phone', base: '', token: '', kind: 'pocket', ...runtime };
-    d.ranches.unshift(rec);
-    startConn(rec);
+    d.ranches.unshift({ id: 'pocket', name: 'this phone', base: '', token: '', kind: 'pocket', ...runtime });
+    startConn(d.ranches[0]);   // the proxy, not the raw record — see addRanch
     recompute();
   }
 
