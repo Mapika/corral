@@ -6,7 +6,13 @@ const path = require('path');
 const { execFile, execFileSync, spawn } = require('child_process');
 const { promisify } = require('util');
 const { WebSocketServer } = require('ws');
-const pty = require('node-pty');
+// node-pty is a native module and the ONLY one the backend uses. It backs just the /ws terminal
+// bridge; agent sessions (/chat) and events (/events) are pure pipes. On platforms where the
+// prebuilt binary is absent (e.g. an on-device Android build), load it optionally so the whole
+// backend still boots — only the raw terminal is disabled.
+let pty = null;
+try { pty = require('node-pty'); }
+catch (e) { console.warn('[terminal] node-pty unavailable — /ws terminal disabled:', e.message); }
 const crypto = require('crypto');
 const chat = require('./chat');
 const tunnels = require('./tunnels');
@@ -1350,6 +1356,7 @@ chatWss.on('connection', (ws, req) => {
 wss.on('connection', (ws, req) => {
   const url = new URL(req.url, 'http://x');
   if (!originAllowed(req.headers.origin)) return ws.close();
+  if (!pty) { try { ws.send('\r\n[terminal unavailable on this platform]\r\n'); } catch (x) {} return ws.close(); }
   const host = url.searchParams.get('server') || 'local';
   const target = url.searchParams.get('target') || '';
   let cwd = url.searchParams.get('cwd') || '';
