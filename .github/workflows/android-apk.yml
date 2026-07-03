@@ -1,0 +1,166 @@
+name: android-apk
+
+# Builds the Android APK in two flavors from one codebase:
+#   slim   — the classic thin paired client
+#   pocket — + the on-device agent runtime (Termux node/rg/bash + claude musl as jniLibs) and the
+#            embedded backend payload: "Run on this phone". Same binary; the UI gates on whether
+#            the runtime libs are present (pocket_available()).
+# Reused by release.yml (attach: true adds the APKs to the draft release) and runs standalone on
+# pushes to the corral-pocket branch for sideload testing.
+
+on:
+  workflow_call:
+    inputs:
+      attach:
+        description: attach APKs to the draft release for this tag
+        type: boolean
+        default: false
+  push:
+    branches: [corral-pocket]
+  workflow_dispatch:
+
+jobs:
+  apk:
+    permissions:
+      contents: write
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: [slim, pocket]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: tauri-android
+
+      # Gradle distribution + AGP dependencies (~1-2 min otherwise). Keyed coarsely — the
+      # dependency set only changes when the tauri CLI (which generates the project) does.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - run: npm ci
+
+      - name: Fetch the pocket runtime (Termux debs + claude musl + Alpine loader)
+        if: matrix.flavor == 'pocket'
+        run: bash scripts/fetch-pocket-runtime.sh
+
+      # Must precede `tauri android build` — the Rust build embeds the payload via include_bytes!.
+      - name: Pack the backend payload
+        if: matrix.flavor == 'pocket'
+        run: node scripts/prepare-pocket.mjs
+
+      - name: Generate the Android project
+        run: |
+          export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          npx tauri android init --ci
+
+      - name: Patch AndroidManifest (cleartext LAN pairing + camera for QR scan + corral:// scheme)
+        run: |
+          MANIFEST=src-tauri/gen/android/app/src/main/AndroidManifest.xml
+          if grep -q usesCleartextTraffic "$MANIFEST"; then
+            sed -i 's/android:usesCleartextTraffic="[^"]*"/android:usesCleartextTraffic="true"/' "$MANIFEST"
+          else
+            sed -i 's/<application/<application android:usesCleartextTraffic="true"/' "$MANIFEST"
+          fi
+          grep -q android.permission.CAMERA "$MANIFEST" || \
+            sed -i 's#<uses-permission android:name="android.permission.INTERNET" */>#<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.CAMERA" />#' "$MANIFEST"
+          # corral:// deep link (ntfy notification taps). tauri android init usually materializes
+          # this from plugins.deep-link in tauri.android.conf.json — inject only if it didn't.
+          grep -q 'android:scheme="corral"' "$MANIFEST" || \
+            sed -i '0,\#</activity>#s##    <intent-filter>\n                <action android:name="android.intent.action.VIEW" />\n                <category android:name="android.intent.category.DEFAULT" />\n                <category android:name="android.intent.category.BROWSABLE" />\n                <data android:scheme="corral" />\n            </intent-filter>\n        </activity>#' "$MANIFEST"
+          cat "$MANIFEST"
+
+      # jniLibs must be extracted (not page-mapped from the APK) so binaries land in
+      # nativeLibraryDir with the exec bit — useLegacyPackaging. keepDebugSymbols stops AGP from
+      # running its strip pass over them (they're not real JNI libs, and stripping needs the NDK).
+      - name: Inject the pocket runtime into the generated project
+        if: matrix.flavor == 'pocket'
+        run: |
+          mkdir -p src-tauri/gen/android/app/src/main/jniLibs
+          cp -r src-tauri/pocket/runtime/jniLibs/arm64-v8a src-tauri/gen/android/app/src/main/jniLibs/
+          cat >> src-tauri/gen/android/app/build.gradle.kts <<'EOF'
+
+          android {
+              packaging {
+                  jniLibs {
+                      useLegacyPackaging = true
+                      keepDebugSymbols.add("**/*.so")
+                  }
+              }
+          }
+          EOF
+
+      - name: Build the APK (arm64)
+        run: |
+          export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          npx tauri android build --apk --target aarch64
+
+      - name: Sign the APK
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KS=corral.keystore
+          if [ -n "${KEYSTORE_B64:-}" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$KS"
+            PASS="$KEYSTORE_PASSWORD"
+          else
+            PASS=$(openssl rand -hex 16)
+            keytool -genkeypair -keystore "$KS" -storepass "$PASS" -alias corral \
+              -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Corral"
+            echo "::notice::Signed with a throwaway key — set ANDROID_KEYSTORE_B64/_PASSWORD secrets for upgradeable builds."
+          fi
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          APK=$(find src-tauri/gen/android -name '*-release-unsigned.apk' | head -1)
+          [ -n "$APK" ] || { echo 'no unsigned APK found'; find src-tauri/gen/android -name '*.apk'; exit 1; }
+          SUFFIX=""; [ "${{ matrix.flavor }}" = "pocket" ] && SUFFIX="_pocket"
+          OUT="Corral_${GITHUB_REF_NAME#v}_arm64${SUFFIX}.apk"
+          "$BT/zipalign" -f 4 "$APK" aligned.apk
+          "$BT/apksigner" sign --ks "$KS" --ks-pass "pass:$PASS" --ks-key-alias corral --out "$OUT" aligned.apk
+          "$BT/apksigner" verify "$OUT"
+          echo "APK_NAME=$OUT" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: corral-android-apk-${{ matrix.flavor }}
+          path: ${{ env.APK_NAME }}
+
+      - name: Attach the APK to the draft release
+        if: ${{ inputs.attach }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          RELEASE_ID=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --jq ".[] | select(.tag_name==\"${TAG}\") | .id" | head -1)
+          if [ -n "$RELEASE_ID" ]; then
+            gh api --method POST \
+              -H "Content-Type: application/vnd.android.package-archive" \
+              "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?name=${APK_NAME}" \
+              --input "$APK_NAME"
+          else
+            echo "::warning::No draft release found for ${TAG}; APK is available as a workflow artifact."
+          fi

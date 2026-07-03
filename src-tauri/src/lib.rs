@@ -4,9 +4,13 @@
 // token, then opens the WebView at that loopback URL. In dev, the vite dev server (which
 // auto-starts the backend) is used instead.
 //
-// Mobile (Android/iOS): there is no sidecar — phones can't run the ssh/pty backend. The app ships
-// the frontend in its bundle and pairs with a desktop Corral over the network (QR pairing, see
-// remote.js); the webview loads the bundled pages and the JS layer talks to the paired server.
+// Mobile (Android/iOS): no bundled sidecar process — the app ships the frontend in its bundle and
+// pairs with a desktop Corral over the network (QR pairing, see remote.js). On Android, pocket
+// builds additionally carry an on-device runtime (jniLibs) and can boot the backend locally —
+// "Run on this phone", see pocket.rs; availability is a runtime check, so slim builds run the
+// same code with the button hidden.
+#[cfg(target_os = "android")]
+mod pocket;
 #[cfg(desktop)]
 use std::net::{TcpListener, TcpStream};
 #[cfg(desktop)]
@@ -94,17 +98,32 @@ pub fn run() {
     run_mobile();
 }
 
-// Mobile shell: bundled frontend, notification plugin, nothing else — the paired desktop backend
-// does the real work. The JS layer detects the tauri origin and shows the pairing screen.
+// Mobile shell: bundled frontend + pairing by default — the paired desktop backend does the real
+// work. Android pocket builds add the on-device backend commands (see pocket.rs); the log plugin
+// routes the backend's stdio into logcat there.
 #[cfg(mobile)]
 fn run_mobile() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_log::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         // corral://session/<id> notification taps land here (scheme registered in the Android
         // manifest); the JS layer routes them to the session chat.
         .plugin(tauri_plugin_deep_link::init())
-        .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![get_token, set_attention])
+        .plugin(tauri_plugin_opener::init());
+    #[cfg(target_os = "android")]
+    let builder = builder
+        .manage(pocket::Pocket(std::sync::Mutex::new(None)))
+        .invoke_handler(tauri::generate_handler![
+            get_token,
+            set_attention,
+            pocket::pocket_available,
+            pocket::pocket_start,
+            pocket::pocket_status,
+            pocket::pocket_stop
+        ]);
+    #[cfg(not(target_os = "android"))]
+    let builder = builder.invoke_handler(tauri::generate_handler![get_token, set_attention]);
+    builder
         .setup(|app| {
             tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default()).build()?;
             Ok(())

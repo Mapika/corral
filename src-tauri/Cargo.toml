@@ -40,3 +40,12 @@ tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
 rand = "0.8"
 hex = "0.4"
+
+# Android-only: the pocket runtime (on-device backend) — token minting, payload extraction,
+# process control. See src/pocket.rs.
+[target.'cfg(target_os = "android")'.dependencies]
+rand = "0.8"
+hex = "0.4"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+tar = "0.4"
+libc = "0.2"
