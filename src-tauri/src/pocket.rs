@@ -61,6 +61,7 @@ fn fgs(method: &'static str) {
     let Ok(mut env) = b.vm.attach_current_thread() else { return };
     let cls = unsafe { jni::objects::JClass::from_raw(b.cls.as_raw()) };
     if env.call_static_method(&cls, method, "()V", &[]).is_err() {
+        let _ = env.exception_describe(); // full Java stack → logcat (W/System.err)
         let _ = env.exception_clear();
         log::warn!("PocketBridge.{method} failed");
     }

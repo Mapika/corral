@@ -99,12 +99,19 @@ pub fn run() {
 }
 
 // Mobile shell: bundled frontend + pairing by default — the paired desktop backend does the real
-// work. Android pocket builds add the on-device backend commands (see pocket.rs); the log plugin
-// routes the backend's stdio into logcat there.
+// work. Android pocket builds add the on-device backend commands (see pocket.rs); android_logger
+// routes log:: (incl. the backend's stdio drain) into logcat WITHOUT tauri-plugin-log — that
+// plugin's Android side forwards every record over JNI and overflowed the weak-global-ref table
+// (51k refs ≈ 10 min at trace level → SIGABRT). liblog FFI has no such per-call JNI cost.
 #[cfg(mobile)]
 fn run_mobile() {
+    #[cfg(target_os = "android")]
+    android_logger::init_once(
+        android_logger::Config::default()
+            .with_max_level(log::LevelFilter::Info)
+            .with_tag("corral"),
+    );
     let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_log::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         // corral://session/<id> notification taps land here (scheme registered in the Android
         // manifest); the JS layer routes them to the session chat.

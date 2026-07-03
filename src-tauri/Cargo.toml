@@ -50,3 +50,6 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 tar = "0.4"
 libc = "0.2"
 jni = "0.21"
+# liblog FFI, no JNI: tauri-plugin-log's Android path forwards every record through its Kotlin
+# plugin over JNI and melted down the webview (weak-global-ref overflow) — see pocket.rs.
+android_logger = "0.14"
