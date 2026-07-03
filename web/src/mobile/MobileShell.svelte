@@ -185,6 +185,35 @@
     clearPocket();
     stopPocket().finally(() => location.reload());
   }
+
+  // Claude login for pocket mode: OAuth manual paste-back driven by pocket_login/-_code in the
+  // shell (credentials land in the app-private HOME — no other way in from outside the app).
+  let login = $state({ busy: false, url: '', code: '', msg: '', error: '' });
+  async function loginStart() {
+    login = { ...login, busy: true, error: '', msg: '' };
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const out = await invoke('pocket_login');
+      const url = (String(out).match(/https:\/\/\S+/) || [''])[0];
+      if (!url) throw new Error('no login URL in output');
+      login = { ...login, busy: false, url };
+    } catch (e) {
+      login = { ...login, busy: false, error: String(e?.message || e) };
+    }
+  }
+  async function openLoginUrl(url) {
+    try { const { openUrl } = await import('@tauri-apps/plugin-opener'); await openUrl(url); } catch (e) {}
+  }
+  async function loginSubmit() {
+    login = { ...login, busy: true, error: '' };
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('pocket_login_code', { code: login.code });
+      login = { busy: false, url: '', code: '', msg: 'Signed in — Claude is ready on this phone.', error: '' };
+    } catch (e) {
+      login = { ...login, busy: false, error: String(e?.message || e) };
+    }
+  }
 </script>
 
 {#if standalone && !paired}
@@ -267,6 +296,20 @@
             {#if notif.error}<p class="errline">{notif.error}</p>{/if}
             {#if notif.note}<p class="hint">{notif.note}</p>{/if}
           {/if}
+          {#if standalone && pocketOn}
+            <h2 class="apph">Claude</h2>
+            {#if !login.url}
+              <button class="unpair checkupd" onclick={loginStart} disabled={login.busy}>{login.busy ? 'starting…' : 'Log in to Claude'}</button>
+            {:else}
+              <button class="getupd" onclick={() => openLoginUrl(login.url)}>Open the login page</button>
+              <p class="hint">Approve there, copy the code, paste it below.</p>
+              <input class="logincode" bind:value={login.code} placeholder="paste the code"
+                     autocapitalize="off" autocorrect="off" spellcheck="false" />
+              <button class="unpair checkupd" onclick={loginSubmit} disabled={login.busy || !login.code.trim()}>{login.busy ? 'signing in…' : 'Submit code'}</button>
+            {/if}
+            {#if login.msg}<p class="hint">{login.msg}</p>{/if}
+            {#if login.error}<p class="errline">{login.error}</p>{/if}
+          {/if}
           {#if standalone}
             <button class="unpair" onclick={unpair}>{pocketOn ? 'Stop running on this phone' : 'Unpair from this server'}</button>
             <h2 class="apph">App</h2>
@@ -325,6 +368,9 @@
   .getupd { margin-top: var(--s3); width: 100%; min-height: 48px; background: var(--paper); color: var(--ink); border: 0; border-radius: var(--pill); font: var(--w-med) 14px var(--sans); cursor: pointer; }
   .testpush { margin-top: var(--s2); width: 100%; min-height: 44px; background: none; border: 0; color: var(--text-dim); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; cursor: pointer; }
   .hint { margin-top: var(--s3); color: var(--text-faint); font-size: 11.5px; line-height: 1.5; }
+  .logincode { margin-top: var(--s3); width: 100%; background: var(--surface-2); border: 0; outline: 0; color: var(--text); font: 16px var(--mono); padding: 14px; }
+  .logincode:focus { box-shadow: inset 0 0 0 1px var(--text-dim); }
+  .logincode::placeholder { color: var(--text-faint); }
 
   @media (prefers-reduced-motion: reduce) { .ldot { animation: none; } }
 </style>

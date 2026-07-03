@@ -120,13 +120,16 @@ fn run_mobile() {
     #[cfg(target_os = "android")]
     let builder = builder
         .manage(pocket::Pocket(std::sync::Mutex::new(None)))
+        .manage(pocket::PocketLogin(std::sync::Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             get_token,
             set_attention,
             pocket::pocket_available,
             pocket::pocket_start,
             pocket::pocket_status,
-            pocket::pocket_stop
+            pocket::pocket_stop,
+            pocket::pocket_login,
+            pocket::pocket_login_code
         ]);
     #[cfg(not(target_os = "android"))]
     let builder = builder.invoke_handler(tauri::generate_handler![get_token, set_attention]);

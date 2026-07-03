@@ -27,6 +27,16 @@ pub struct Run {
     token: String,
 }
 
+// In-flight `claude auth login` (OAuth manual paste-back): child + its accumulated output +
+// stdin for the code. Login MUST run inside the app (this process): the credentials land in the
+// app-private HOME, which adb shell can't write.
+pub struct PocketLogin(pub Mutex<Option<LoginRun>>);
+pub struct LoginRun {
+    child: Child,
+    stdin: Option<std::process::ChildStdin>,
+    out: std::sync::Arc<Mutex<String>>,
+}
+
 #[derive(serde::Serialize, Clone)]
 pub struct PocketInfo {
     running: bool,
@@ -169,9 +179,24 @@ fn drain<T: Read + Send + 'static>(pipe: Option<T>, tag: &'static str) {
     }
 }
 
+// Shared env contract for anything spawned from the pocket runtime (backend, claude login):
+// bionic-linked binaries resolve libs via LD_LIBRARY_PATH, HOME/TMPDIR live in the pocket root.
+fn apply_runtime_env(cmd: &mut Command, root: &Path, native: &Path) {
+    let s = |p: &Path| p.to_string_lossy().into_owned();
+    let (rt_bin, rt_lib) = (root.join("rt/bin"), root.join("rt/lib"));
+    cmd.env("LD_LIBRARY_PATH", format!("{}:{}", s(&rt_lib), s(native)))
+        .env("PATH", format!("{}:/system/bin:/system/xbin", s(&rt_bin)))
+        .env("HOME", s(&root.join("home")))
+        .env("TMPDIR", s(&root.join("tmp")))
+        .env("LANG", "en_US.UTF-8")
+        .env("USE_BUILTIN_RIPGREP", "0") // claude's npm-shipped rg is glibc; the bionic one on PATH works
+        .env("DISABLE_AUTOUPDATER", "1") // runtime updates ride APK updates (Play policy)
+        .env("DISABLE_TELEMETRY", "1");
+}
+
 fn spawn_backend(root: &Path, native: &Path) -> Result<Run, String> {
     extract_payload(root)?;
-    let (rt_bin, rt_lib) = link_runtime(root, native)?;
+    let (rt_bin, _rt_lib) = link_runtime(root, native)?;
     let home = root.join("home");
     let tmp = root.join("tmp");
     std::fs::create_dir_all(home.join("projects")).map_err(|e| e.to_string())?;
@@ -180,24 +205,18 @@ fn spawn_backend(root: &Path, native: &Path) -> Result<Run, String> {
     let port = choose_port();
     let token = gen_token();
     let s = |p: &Path| p.to_string_lossy().into_owned();
-    let mut child = Command::new(native.join("libnode_exec.so"))
-        .arg("server.js")
+    let mut cmd = Command::new(native.join("libnode_exec.so"));
+    cmd.arg("server.js")
         .current_dir(root.join("backend"))
         .env("PORT", port.to_string())
         .env("CORRAL_BIND", "127.0.0.1")
         .env("CORRAL_TOKEN", &token)
-        .env("LD_LIBRARY_PATH", format!("{}:{}", s(&rt_lib), s(native)))
-        .env("PATH", format!("{}:/system/bin:/system/xbin", s(&rt_bin)))
-        .env("HOME", s(&home))
-        .env("TMPDIR", s(&tmp))
-        .env("LANG", "en_US.UTF-8")
         .env("CORRAL_CLAUDE_BIN", s(&rt_bin.join("claude")))
         .env("CORRAL_EXEC_LOADER", s(&rt_bin.join("ld-musl")))
         .env("CORRAL_DNS_PROXY_PORT", DNS_PROXY_PORT.to_string())
-        .env("CORRAL_AGENT_HTTPS_PROXY", format!("http://127.0.0.1:{DNS_PROXY_PORT}"))
-        .env("USE_BUILTIN_RIPGREP", "0") // claude's npm-shipped rg is glibc; the bionic one on PATH works
-        .env("DISABLE_AUTOUPDATER", "1") // runtime updates ride APK updates (Play policy)
-        .env("DISABLE_TELEMETRY", "1")
+        .env("CORRAL_AGENT_HTTPS_PROXY", format!("http://127.0.0.1:{DNS_PROXY_PORT}"));
+    apply_runtime_env(&mut cmd, root, native);
+    let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -219,6 +238,107 @@ fn spawn_backend(root: &Path, native: &Path) -> Result<Run, String> {
         return Err("backend did not start listening within 15s".into());
     }
     Ok(Run { child, port, token })
+}
+
+// Like drain(), but also accumulates lines for the login flow (the OAuth URL + status text).
+fn drain_into<T: Read + Send + 'static>(pipe: Option<T>, buf: std::sync::Arc<Mutex<String>>) {
+    if let Some(p) = pipe {
+        std::thread::spawn(move || {
+            for line in BufReader::new(p).lines().map_while(Result::ok) {
+                log::info!("[login] {line}");
+                let mut b = buf.lock().unwrap();
+                b.push_str(&line);
+                b.push('\n');
+            }
+        });
+    }
+}
+
+// Start `claude auth login --claudeai` (OAuth manual paste-back) and return its output once the
+// login URL appears. Needs the backend running — its CONNECT proxy is the musl binary's DNS.
+#[tauri::command]
+pub async fn pocket_login(app: tauri::AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Manager;
+        let native = native_library_dir().ok_or("pocket runtime not present in this build")?;
+        let root = pocket_root(&app)?;
+        if app.state::<Pocket>().0.lock().unwrap().is_none() {
+            return Err("start the on-device backend first".into());
+        }
+        let state = app.state::<PocketLogin>();
+        if let Some(mut old) = state.0.lock().unwrap().take() {
+            let _ = old.child.kill();
+            let _ = old.child.wait();
+        }
+        let rt_bin = root.join("rt/bin");
+        let mut cmd = Command::new(rt_bin.join("ld-musl"));
+        cmd.arg(rt_bin.join("claude"))
+            .args(["auth", "login", "--claudeai"])
+            .current_dir(root.join("home"))
+            .env("HTTPS_PROXY", format!("http://127.0.0.1:{DNS_PROXY_PORT}"))
+            .env("HTTP_PROXY", format!("http://127.0.0.1:{DNS_PROXY_PORT}"));
+        apply_runtime_env(&mut cmd, &root, &native);
+        let mut child = cmd
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("spawn claude login: {e}"))?;
+        let out = std::sync::Arc::new(Mutex::new(String::new()));
+        let stdin = child.stdin.take();
+        drain_into(child.stdout.take(), out.clone());
+        drain_into(child.stderr.take(), out.clone());
+        let mut snapshot = String::new();
+        for _ in 0..300 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            snapshot = out.lock().unwrap().clone();
+            if snapshot.contains("https://") {
+                break;
+            }
+        }
+        let got_url = snapshot.contains("https://");
+        *state.0.lock().unwrap() = Some(LoginRun { child, stdin, out });
+        if got_url {
+            Ok(snapshot)
+        } else {
+            Err(format!("no login URL after 30s:\n{snapshot}"))
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// Paste-back: hand the OAuth code to the waiting login child and report how it ended.
+#[tauri::command]
+pub async fn pocket_login_code(app: tauri::AppHandle, code: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Manager;
+        let state = app.state::<PocketLogin>();
+        let mut run = state.0.lock().unwrap().take().ok_or("no login in progress")?;
+        {
+            use std::io::Write;
+            let mut stdin = run.stdin.take().ok_or("login stdin gone")?;
+            stdin
+                .write_all(code.trim().as_bytes())
+                .and_then(|_| stdin.write_all(b"\n"))
+                .map_err(|e| format!("write code: {e}"))?;
+        }
+        for _ in 0..900 {
+            if let Ok(Some(status)) = run.child.try_wait() {
+                let outs = run.out.lock().unwrap().clone();
+                return if status.success() {
+                    Ok(outs)
+                } else {
+                    Err(format!("login exited {status}:\n{outs}"))
+                };
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let _ = run.child.kill();
+        Err("login did not finish within 90s".into())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // Runtime check, not a build flag: the same binary serves the slim and pocket flavors — only the
