@@ -369,6 +369,18 @@ if (SELFTEST) {
   a.equal(reqToken({ headers: {} }, new URL('http://x/api/a?tk=q')), 'q');
   a.equal(reqToken({ headers: { 'x-corral-token': 'h', authorization: 'Bearer b' } }, new URL('http://x/api/a?tk=q')), 'h');
   a.equal(reqToken({ headers: {} }, new URL('http://x/api/a')), '');
+  // pocket CONNECT proxy: 443-only, never a relay to loopback/private targets
+  const { parseConnectTarget } = require('./connectproxy');
+  a.deepEqual(parseConnectTarget('api.anthropic.com:443'), { host: 'api.anthropic.com', port: 443 });
+  a.equal(parseConnectTarget('api.anthropic.com:80'), null);      // TLS port only
+  a.equal(parseConnectTarget('localhost:443'), null);             // no tunneling back to the backend
+  a.equal(parseConnectTarget('127.0.0.2:443'), null);
+  a.equal(parseConnectTarget('192.168.1.20:443'), null);          // no LAN pivot
+  a.equal(parseConnectTarget('100.64.0.1:443'), null);            // tailnet CGNAT range
+  a.equal(parseConnectTarget('169.254.169.254:443'), null);       // link-local/metadata
+  a.equal(parseConnectTarget('[::1]:443'), null);                 // IPv6 literals rejected outright
+  a.equal(parseConnectTarget('evil.com'), null);
+  a.equal(parseConnectTarget(''), null);
   a.equal(originAllowed(undefined), true);
   a.equal(originAllowed('http://tauri.localhost'), true);
   a.equal(originAllowed('http://localhost:5173'), true);
@@ -422,6 +434,22 @@ if (SELFTEST) {
   a.ok(!lsp.remote && lsp.args.includes('-p') && lsp.cwd === 'C:/x');
   const rsm = chat.buildSpawn({ host: 'local', cwd: 'C:/x', resumeId: 'abc-123' });
   a.ok(rsm.args.includes('--resume') && rsm.args.includes('abc-123'));   // resume injects --resume <id>
+  // pocket hooks: binary override + explicit-loader prefix (local spawns only)
+  {
+    process.env.CORRAL_CLAUDE_BIN = '/rt/bin/claude';
+    const ovr = chat.buildSpawn({ host: 'local', cwd: '/w' });
+    a.equal(ovr.bin, '/rt/bin/claude');
+    process.env.CORRAL_EXEC_LOADER = '/rt/bin/ld-musl-aarch64.so.1';
+    const ldr = chat.buildSpawn({ host: 'local', cwd: '/w' });
+    a.equal(ldr.bin, '/rt/bin/ld-musl-aarch64.so.1');
+    a.equal(ldr.args[0], '/rt/bin/claude');
+    a.ok(ldr.args.includes('-p') && ldr.args.includes('stream-json'));
+    const rmt = chat.buildSpawn({ host: 'box1', cwd: '/w' });
+    a.ok(rmt.remote && rmt.bin !== '/rt/bin/ld-musl-aarch64.so.1');      // remote spawns unaffected
+    delete process.env.CORRAL_CLAUDE_BIN;
+    delete process.env.CORRAL_EXEC_LOADER;
+    a.notEqual(chat.buildSpawn({ host: 'local', cwd: '/w' }).bin, '/rt/bin/claude');   // read per-call
+  }
   // transcript replay: .jsonl lines -> live-stream events, sidechain/bookkeeping dropped
   const tr = chat.parseTranscript([
     JSON.stringify({ type: 'user', message: { role: 'user', content: 'hi there' } }),
@@ -1394,6 +1422,12 @@ wss.on('connection', (ws, req) => {
 
 const PORT = process.env.PORT || 7878;
 const BIND = process.env.CORRAL_BIND || process.env.CODAPP_BIND || '127.0.0.1';   // loopback only; never 0.0.0.0
+// On-device (pocket) builds: host the CONNECT proxy the musl claude binary needs for DNS.
+if (process.env.CORRAL_DNS_PROXY_PORT) {
+  const p = Math.floor(+process.env.CORRAL_DNS_PROXY_PORT);
+  if (p >= 1024 && p <= 65535) require('./connectproxy').startConnectProxy({ port: p });
+  else console.error(`CORRAL_DNS_PROXY_PORT=${process.env.CORRAL_DNS_PROXY_PORT} invalid (1024-65535) — proxy not started`);
+}
 if (!demo) tunnels.restorePersisted();                   // reap orphaned ssh forwards, then bring last run's tunnels back up
 if (!demo) syncRemoteListener();                         // phone pairing left enabled last run comes back up with it
 // Kill every child (agent sessions + ssh forwards) and flush the roster on the way out. The

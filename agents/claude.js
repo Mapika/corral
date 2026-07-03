@@ -40,7 +40,14 @@ function buildSpawn({ host, cwd, model, permissionMode = 'auto', safe = false, r
     const inner = (cwd ? 'cd ' + shq(cwd) + ' && ' : '') + 'claude ' + cargs.map(shq).join(' ');
     return { remote, bin: SSH, args: [...SSH_OPTS, host, 'bash -lc ' + shq(inner)], cwd: undefined };
   }
-  return { remote, bin: CLAUDE, args: cargs, cwd: cwd || process.cwd() };
+  // Pocket/embedded builds override the binary (CORRAL_CLAUDE_BIN) and, when the binary's own
+  // PT_INTERP doesn't exist on the platform (claude's musl build on Android), run it through an
+  // explicit dynamic loader (CORRAL_EXEC_LOADER <claude> <args…>). Read per-call, not at module
+  // load, so the hooks are testable and a launcher can set them for the whole backend process.
+  const bin = process.env.CORRAL_CLAUDE_BIN || CLAUDE;
+  const loader = process.env.CORRAL_EXEC_LOADER || '';
+  if (loader) return { remote, bin: loader, args: [bin, ...cargs], cwd: cwd || process.cwd() };
+  return { remote, bin, args: cargs, cwd: cwd || process.cwd() };
 }
 
 // Pass-through stream-json line parser (pure): claude already emits the wire format.
@@ -93,6 +100,9 @@ function start(s, io, { cwd, model, safe, resumeId } = {}) {
   const sp = buildSpawn({ host: s.host, cwd, model, permissionMode: s.permissionMode, safe, resumeId });
   const env = { ...process.env };
   delete env.ANTHROPIC_API_KEY;                 // subscription guarantee (local; the remote uses its own env)
+  // Pocket builds: route only the agent's traffic through the backend's CONNECT proxy (musl DNS
+  // fix). Scoped to the child so the backend's own HTTP keeps using the platform resolver directly.
+  if (process.env.CORRAL_AGENT_HTTPS_PROXY) env.HTTPS_PROXY = env.HTTP_PROXY = process.env.CORRAL_AGENT_HTTPS_PROXY;
   const proc = s.proc = spawn(sp.bin, sp.args, { cwd: sp.cwd, env });
   s.pid = proc.pid || null;                     // persisted so a crashed run's orphan can be reaped
   s._claudePerms = new Map();

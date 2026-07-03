@@ -14,3 +14,4 @@ Thumbs.db
 # tauri
 src-tauri/binaries/
 src-tauri/gen/
+src-tauri/pocket/
