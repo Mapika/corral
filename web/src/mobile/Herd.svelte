@@ -1,6 +1,7 @@
 <script>
   // Home screen: what needs me, then what's alive, then the rest — decisions first, chrome never.
   import { respondPermission, resumeSession, removeSession } from '../lib/api.js';
+  import { showToast } from './nav.svelte.js';
   import { lastActiveLabel } from '../lib/operatorStatus.mjs';
   import { agentLabel, sessionHostLabel, sessionPathParts, sessionStatusView } from '../lib/sessionView.mjs';
   import Shader from '../lib/Shader.svelte';
@@ -22,11 +23,15 @@
   const project = (s) => s.label || sessionPathParts(s.cwd).project;
   let acting = $state({});     // session id -> in-flight action guard
 
+  // Decision actions are optimistic — the card reacts under the thumb, the round-trip settles
+  // behind it, and the next poll reconciles either way.
   async function respond(s, decision) {
     if (!s.pendingPerm || acting[s.id]) return;
     buzz();
     acting[s.id] = true;
-    try { await respondPermission(s.id, s.pendingPerm.id, decision); await data.poll(); }
+    const perm = s.pendingPerm;
+    s.pendingPerm = null;
+    try { await respondPermission(s.id, perm.id, decision); await data.poll(); }
     catch (e) { onOpenSession?.(s); }          // prompt already answered/changed — resolve it in the chat
     finally { delete acting[s.id]; }
   }
@@ -34,14 +39,15 @@
     if (acting[s.id]) return;
     acting[s.id] = true;
     try { await resumeSession(s.id); await data.poll(); onOpenSession?.({ ...s, status: 'starting' }); }
-    catch (e) {}
+    catch (e) { showToast('Could not resume this session.'); }
     finally { delete acting[s.id]; }
   }
   async function dismiss(s) {
     if (acting[s.id]) return;
     acting[s.id] = true;
+    data.d.sessions = data.d.sessions.filter((x) => x.id !== s.id);
     try { await removeSession(s.id); await data.poll(); }
-    catch (e) {}
+    catch (e) { showToast('Could not dismiss — it stays in the herd.'); await data.poll(); }
     finally { delete acting[s.id]; }
   }
 </script>

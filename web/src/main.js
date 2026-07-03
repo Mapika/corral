@@ -18,16 +18,22 @@ async function boot() {
   const loopback = isLoopbackPage();
   const m = location.hash.match(/[#&]tk=([a-f0-9]+)/i);
   let paired = false;
+  let pocketError = '';
   if (m) {
     setToken(m[1]);
     if (!loopback && !standalone) { try { localStorage.setItem(TOKEN_KEY, m[1]); } catch (e) {} }
     history.replaceState(null, '', location.pathname + location.search);
   } else if (standalone) {
     // Pocket mode first: the on-device backend's token is per-run, so it's re-minted here every
-    // launch (never read from storage). A failed start falls through to Connect, which offers
-    // the button again alongside classic pairing.
+    // launch (never read from storage). The start can take seconds (payload extract + listen
+    // wait) — say so instead of showing a blank page; a failure lands on Connect WITH the reason
+    // and the "Run on this phone" button as the retry.
     if (pocketEnabled()) {
-      try { await startPocket(); paired = true; } catch (e) {}
+      bootStatus('Starting on this phone…');
+      try { await startPocket(); paired = true; } catch (e) {
+        pocketError = 'The on-device backend did not start' + (e?.message ? ' — ' + e.message : '.');
+      }
+      bootStatus('');
     }
     if (!paired) {
       let base = '', token = '';
@@ -41,7 +47,7 @@ async function boot() {
   } else if (window.__TAURI_INTERNALS__) {
     try { const { invoke } = await import('@tauri-apps/api/core'); setToken(await invoke('get_token')); } catch (e) {}
   }
-  mount(Root, { target: document.getElementById('app'), props: { standalone, paired } });
+  mount(Root, { target: document.getElementById('app'), props: { standalone, paired, pocketError } });
 
   // Offline shell for browser pages (the mobile shell ships its own bundle, dev wants fresh
   // modules). serviceWorker only exists in secure contexts, so plain-http LAN pairing opts out
@@ -49,5 +55,14 @@ async function boot() {
   if (import.meta.env.PROD && !standalone && 'serviceWorker' in navigator) {
     try { navigator.serviceWorker.register('/sw.js'); } catch (e) {}
   }
+}
+// Pre-mount status line (Svelte isn't up yet while the pocket backend boots). Cleared before
+// mount — Svelte 5 mount() appends to the target rather than replacing its contents.
+function bootStatus(msg) {
+  const el = document.getElementById('app');
+  if (!el) return;
+  el.innerHTML = msg
+    ? '<div style="min-height:100dvh;display:flex;align-items:center;justify-content:center;color:var(--text-dim,#888);font-size:13.5px">' + msg + '</div>'
+    : '';
 }
 boot();

@@ -13,6 +13,8 @@
     upload: 'M4 4h16 M12 20V8 M8 12l4-4 4 4',
     copy: 'M9 9h11v11H9z M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1',
     chevron: 'M9 6l6 6-6 6',
+    'chevron-left': 'M15 6l-6 6 6 6',
+    kebab: 'M12 5h.01 M12 12h.01 M12 19h.01',
     filter: 'M22 3H2l8 9.5V19l4 2v-8.5Z',
     pencil: 'M12 20h9 M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z',
     trash: 'M3 6h18 M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2 M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6',

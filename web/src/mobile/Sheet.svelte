@@ -1,6 +1,9 @@
 <script>
-  // Bottom sheet — the phone's one modal surface. Backdrop tap or the grip closes it.
+  // Bottom sheet — the phone's one modal surface. Backdrop tap, the grip, or hardware back
+  // closes it (every sheet registers on the shared back stack by existing).
+  import { pushOverlay } from './nav.svelte.js';
   let { onclose, label = '', children } = $props();
+  $effect(() => pushOverlay(() => onclose?.()));
 </script>
 
 <div class="backdrop" onclick={() => onclose?.()} aria-hidden="true"></div>

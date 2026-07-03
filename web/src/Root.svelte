@@ -4,7 +4,7 @@
   import App from './App.svelte';
   import MobileShell from './mobile/MobileShell.svelte';
 
-  let { standalone = false, paired = true } = $props();
+  let { standalone = false, paired = true, pocketError = '' } = $props();
 
   const mq = typeof window !== 'undefined' ? window.matchMedia('(max-width: 700px)') : null;
   let narrow = $state(mq ? mq.matches : false);
@@ -17,7 +17,7 @@
 </script>
 
 {#if standalone || narrow}
-  <MobileShell {standalone} initialPaired={paired} />
+  <MobileShell {standalone} initialPaired={paired} {pocketError} />
 {:else}
   <App />
 {/if}

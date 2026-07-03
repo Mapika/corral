@@ -4,6 +4,7 @@
   // ranch in the hit's folder.
   import { searchHistory } from '../lib/api.js';
   import { apiErrorMessage } from '../lib/apiRequest.mjs';
+  import Icon from '../lib/Icon.svelte';
 
   let { data, onclose, onOpenSession, onRanchAt } = $props();
 
@@ -40,7 +41,7 @@
 
 <div class="search">
   <header>
-    <button class="back" onclick={() => onclose?.()} aria-label="Close search">&lsaquo;</button>
+    <button class="back" onclick={() => onclose?.()} aria-label="Close search"><Icon name="chevron-left" size={22} /></button>
     <input bind:this={inputEl} bind:value={q} placeholder="Search past sessions"
            autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Search session history" />
   </header>
@@ -48,6 +49,7 @@
   <div class="body">
     {#if error}
       <p class="state" role="alert">{error}</p>
+      <button class="retry" onclick={() => run(q.trim())}>Try again</button>
     {:else if searching && hits.length === 0}
       <p class="state">searching…</p>
     {:else if searched && hits.length === 0}
@@ -75,7 +77,8 @@
 <style>
   .search { position: fixed; inset: 0; z-index: 35; display: flex; flex-direction: column; background: var(--bg); }
   header { flex: none; display: flex; align-items: center; gap: 4px; min-height: 54px; padding-top: env(safe-area-inset-top, 0px); border-bottom: 1px solid var(--seam); }
-  .back { flex: none; width: 46px; height: 46px; background: none; border: 0; color: var(--text-dim); font-size: 26px; line-height: 1; cursor: pointer; }
+  .back { flex: none; width: 46px; height: 46px; background: none; border: 0; color: var(--text-dim); cursor: pointer; display: grid; place-items: center; }
+  .retry { align-self: flex-start; background: var(--chip); color: var(--text); border: 0; border-radius: var(--pill); min-height: 42px; padding: 0 20px; font: var(--w-reg) 13px var(--sans); cursor: pointer; }
   input { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: var(--text); font: var(--w-light) 19px var(--sans); padding: 8px 14px 8px 0; }
   input::placeholder { color: var(--text-faint); }
 

@@ -7,6 +7,7 @@
   import { isLiveSession } from '../lib/operatorStatus.mjs';
   import { sessionHostLabel, sessionPathParts } from '../lib/sessionView.mjs';
   import Sheet from './Sheet.svelte';
+  import { showToast } from './nav.svelte.js';
 
   let { data, onOpenSession, onLaunch } = $props();
   let live = $derived(data.d.sessions.filter((s) => isLiveSession(s)));
@@ -31,21 +32,27 @@
   }
   async function whoa(s) {
     actions = null;
-    try { await interruptSession(s.id); await data.poll(); } catch (e) {}
+    try { await interruptSession(s.id); await data.poll(); }
+    catch (e) { showToast('Could not stop the turn.'); }
   }
   async function end(s) {
     actions = null;
-    try { await killSession(s.id); await data.poll(); } catch (e) {}
+    try { await killSession(s.id); await data.poll(); }
+    catch (e) { showToast('Could not end the session.'); }
   }
 </script>
 
 <div class="feed">
   {#if live.length === 0}
-    <div class="empty">
-      <b>Nothing running.</b>
-      <span>The fleet view streams every live agent, all hosts at once.</span>
-      <button class="ranch" onclick={() => onLaunch?.()}>Ranch an agent</button>
-    </div>
+    {#if !data.d.loaded}
+      <div class="empty"><span class="conn">connecting…</span></div>
+    {:else}
+      <div class="empty">
+        <b>Nothing running.</b>
+        <span>The fleet view streams every live agent, all hosts at once.</span>
+        <button class="ranch" onclick={() => onLaunch?.()}>Ranch an agent</button>
+      </div>
+    {/if}
   {:else}
     {#each live as s (s.id)}
       <div class="cell" role="presentation"
@@ -79,6 +86,7 @@
   .empty { min-height: 56dvh; display: flex; flex-direction: column; justify-content: center; gap: 12px; padding: 0 var(--s4); }
   .empty b { font-size: clamp(34px, 9vw, 46px); line-height: 1.02; font-weight: var(--w-light); color: var(--text); }
   .empty span { color: var(--text-dim); font-size: 13px; max-width: 300px; }
+  .empty .conn { font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--text-faint); }
   .ranch { align-self: flex-start; margin-top: 14px; background: var(--paper); color: var(--ink); border: 0; border-radius: var(--pill); padding: 12px 22px; font: var(--w-med) 13px var(--sans); cursor: pointer; }
 
   .menu { display: flex; flex-direction: column; }

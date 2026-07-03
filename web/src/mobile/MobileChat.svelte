@@ -8,7 +8,9 @@
   import { highlightCode, renderMarkdown } from '../lib/markdown.js';
   import { prettyModel } from '../lib/format.js';
   import { agentLabel, canSubmitMessage, composerPlaceholder, composerSubmitState, sessionHostLabel, sessionPathParts, sessionStatusView } from '../lib/sessionView.mjs';
+  import Icon from '../lib/Icon.svelte';
   import Sheet from './Sheet.svelte';
+  import { pushOverlay, showToast } from './nav.svelte.js';
 
   let { session, onclose, onchanged } = $props();
 
@@ -98,19 +100,34 @@
     const next = labelDraft.trim().slice(0, 60);
     const effective = next && next !== parts.project ? next : null;   // folder name = no label
     if (effective === label) return;
-    try { await setSessionLabel(session.id, effective || ''); label = effective; onchanged?.(); } catch (e) {}
+    try { await setSessionLabel(session.id, effective || ''); label = effective; onchanged?.(); }
+    catch (e) { showToast('Rename failed — try again.'); }
   }
   async function revive() {
     menuOpen = false;
-    try { await resumeSession(session.id); cs.status = 'starting'; onchanged?.(); } catch (e) {}
+    try { await resumeSession(session.id); cs.status = 'starting'; onchanged?.(); }
+    catch (e) { showToast('Could not resume this session.'); }
   }
-  async function end() { menuOpen = false; try { await killSession(session.id); onchanged?.(); } catch (e) {} }
-  async function removeIt() { menuOpen = false; try { await removeSession(session.id); onchanged?.(); onclose?.(); } catch (e) {} }
+  async function end() {
+    menuOpen = false;
+    try { await killSession(session.id); onchanged?.(); }
+    catch (e) { showToast('Could not end the session.'); }
+  }
+  async function removeIt() {
+    menuOpen = false;
+    try { await removeSession(session.id); onchanged?.(); onclose?.(); }
+    catch (e) { showToast('Could not remove the session.'); }
+  }
   async function openChanges() {
     menuOpen = false;
     changes = { loading: true };
     try { changes = await gitDiff(session.host, session.cwd); } catch (e) { changes = { isRepo: false }; }
   }
+  // The diff subview is its own layer — hardware back closes it before the chat.
+  $effect(() => {
+    if (!changes) return;
+    return pushOverlay(() => (changes = null));
+  });
 
   $effect(() => {
     const id = session?.id;
@@ -148,13 +165,13 @@
 
 <div class="mchat">
   <header>
-    <button class="back" onclick={() => onclose?.()} aria-label="Back">&lsaquo;</button>
+    <button class="back" onclick={() => onclose?.()} aria-label="Back"><Icon name="chevron-left" size={22} /></button>
     <div class="who">
       <b>{label || parts.project}</b>
       <span>{sessionHostLabel(session.host)} · {agentLabel(session.agent)}{#if cs.model} · {prettyModel(cs.model)}{/if}</span>
     </div>
     <span class="stat {statusView.tone}" title={statusView.detail}><span class="lamp"></span>{statusView.label}</span>
-    <button class="kebab" onclick={() => (menuOpen = true)} aria-label="Session actions">&#8942;</button>
+    <button class="kebab" onclick={() => (menuOpen = true)} aria-label="Session actions"><Icon name="kebab" size={17} stroke={2.75} /></button>
   </header>
 
   <div class="scroll" bind:this={scrollEl}>
@@ -248,7 +265,7 @@
         <button class="go" class:ready={canSend} class:busy={statusKey === 'busy'}
                 disabled={statusKey !== 'busy' && !canSend} onclick={primary}
                 aria-label={statusKey === 'busy' ? 'Stop' : 'Send'}>
-          {#if statusKey === 'busy'}<span class="stopsq"></span>{:else}&#8593;{/if}
+          {#if statusKey === 'busy'}<span class="stopsq"></span>{:else}<Icon name="up" size={17} stroke={1.8} />{/if}
         </button>
       </div>
     {/if}
@@ -278,7 +295,7 @@
   {#if changes}
     <div class="diffview">
       <header>
-        <button class="back" onclick={() => (changes = null)} aria-label="Close changes">&lsaquo;</button>
+        <button class="back" onclick={() => (changes = null)} aria-label="Close changes"><Icon name="chevron-left" size={22} /></button>
         <div class="who"><b>Changes</b><span>{session.cwd}</span></div>
       </header>
       <div class="diffbody">
@@ -303,7 +320,7 @@
   .mchat { position: fixed; inset: 0; z-index: 30; display: flex; flex-direction: column; background: var(--bg); }
 
   header { flex: none; display: flex; align-items: center; gap: 10px; min-height: 54px; padding: 0 6px 0 0; padding-top: env(safe-area-inset-top, 0px); border-bottom: 1px solid var(--seam); }
-  .back { flex: none; width: 46px; height: 46px; background: none; border: 0; color: var(--text-dim); font-size: 26px; line-height: 1; cursor: pointer; }
+  .back { flex: none; width: 46px; height: 46px; background: none; border: 0; color: var(--text-dim); cursor: pointer; display: grid; place-items: center; }
   .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .who b { color: var(--text); font-size: 15px; font-weight: var(--w-med); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .who span { color: var(--text-faint); font: 10.5px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -313,7 +330,7 @@
   .stat.busy .lamp { background: var(--mercury); animation: pulse 2.2s ease-in-out infinite; }
   .stat.error .lamp { background: var(--alert); }
   .stat.dormant .lamp { border: 1.5px dashed var(--text-faint); background: transparent; }
-  .kebab { flex: none; width: 44px; height: 46px; background: none; border: 0; color: var(--text-dim); font-size: 18px; cursor: pointer; }
+  .kebab { flex: none; width: 44px; height: 46px; background: none; border: 0; color: var(--text-dim); cursor: pointer; display: grid; place-items: center; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
 
   .scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }

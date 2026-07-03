@@ -4,7 +4,8 @@
   import { getServer, getWebPush, resumeSession, testWebPush, webPushSubscribe, webPushUnsubscribe } from '../lib/api.js';
   import { applicationServerKeyBytes, subscriptionParams } from '../lib/webPushClient.mjs';
   import { releaseUpdate, sessionFromDeepLink } from '../lib/appUpdate.mjs';
-  import { clearPocket, pocketEnabled, stopPocket } from '../lib/pocket.js';
+  import { clearPocket, onPocketState, pocketEnabled, pocketLoggedIn, startPocket, stopPocket } from '../lib/pocket.js';
+  import { pushOverlay, showToast, toast } from './nav.svelte.js';
   import { SERVER_KEY, TOKEN_KEY } from '../lib/serverBase.mjs';
   import { isResumableSession } from '../lib/operatorStatus.mjs';
   import Icon from '../lib/Icon.svelte';
@@ -17,7 +18,7 @@
   import Sheet from './Sheet.svelte';
   import { createMobileData } from './data.svelte.js';
 
-  let { standalone = false, initialPaired = true } = $props();
+  let { standalone = false, initialPaired = true, pocketError = '' } = $props();
 
   let paired = $state(standalone ? initialPaired : true);
   let tab = $state('herd');
@@ -179,12 +180,40 @@
     }
     chat = chatDesc(next);
   }
-  const pocketOn = pocketEnabled();
+  let pocketOn = $state(pocketEnabled());
   function unpair() {
     try { localStorage.removeItem(SERVER_KEY); localStorage.removeItem(TOKEN_KEY); } catch (e) {}
     clearPocket();
     stopPocket().finally(() => location.reload());
   }
+
+  // Watchdog signal: the shell restarts a crashed on-device backend and reports over pocket-state
+  // (pocket.js rewires the client base/token; here we surface it and refresh the roster).
+  let pocketDown = $state(false);
+  let pocketRestarting = $state(false);
+  $effect(() => {
+    if (!pocketOn) return;
+    return onPocketState((p) => {
+      pocketDown = !p.running;
+      if (p.running) { data.poll(); claudeAuthed = null; probeAuth(); }
+    });
+  });
+  // Manual restart for when the watchdog gave up (or the app just woke to a dead backend).
+  async function restartPocket() {
+    pocketRestarting = true;
+    try { await startPocket(); pocketDown = false; await data.poll(); }
+    catch (e) { showToast('Restart failed' + (e?.message ? ' — ' + e.message : '')); }
+    finally { pocketRestarting = false; }
+  }
+
+  // Claude auth on this phone: probed (a file check in the shell), not assumed — the Herd nudge
+  // and the settings section both key off it. null = unknown/not applicable.
+  let claudeAuthed = $state(null);
+  async function probeAuth() {
+    if (!standalone || !pocketOn) return;
+    claudeAuthed = await pocketLoggedIn();
+  }
+  $effect(() => { if (pocketOn) probeAuth(); });
 
   // Claude login for pocket mode: OAuth manual paste-back driven by pocket_login/-_code in the
   // shell (credentials land in the app-private HOME — no other way in from outside the app).
@@ -210,14 +239,26 @@
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('pocket_login_code', { code: login.code });
       login = { busy: false, url: '', code: '', msg: 'Signed in — Claude is ready on this phone.', error: '' };
+      claudeAuthed = true;
     } catch (e) {
       login = { ...login, busy: false, error: String(e?.message || e) };
     }
   }
+
+  // Hardware back peels overlays (sheets register themselves via Sheet; chat and search are
+  // full-screen pushes, so they register here where their state lives).
+  $effect(() => {
+    if (!chat) return;
+    return pushOverlay(() => { chat = null; data.poll(); });
+  });
+  $effect(() => {
+    if (!searchOpen) return;
+    return pushOverlay(() => (searchOpen = false));
+  });
 </script>
 
 {#if standalone && !paired}
-  <Connect onPaired={() => (paired = true)} />
+  <Connect onPaired={() => { paired = true; pocketOn = pocketEnabled(); }} initialError={pocketError} />
 {:else}
   <div class="mshell">
     <header class="top">
@@ -225,12 +266,26 @@
       <span class="sp"></span>
       {#if data.d.offline}
         <span class="off"><span class="odot"></span>offline</span>
+      {:else if data.d.loaded && !data.d.live}
+        <span class="off"><span class="pdot2"></span>polling</span>
       {:else if liveCount}
         <span class="run"><span class="ldot"></span>{liveCount} running</span>
       {/if}
       <button class="gear" onclick={() => (searchOpen = true)} aria-label="Search history"><Icon name="search" size={15} /></button>
-      <button class="gear" onclick={() => (settingsOpen = true)} aria-label="Settings">&#8942;</button>
+      <button class="gear" onclick={() => (settingsOpen = true)} aria-label="Settings"><Icon name="kebab" size={16} stroke={2.75} /></button>
     </header>
+
+    {#if pocketOn && (pocketDown || data.d.offline)}
+      <button class="nudge" onclick={restartPocket} disabled={pocketRestarting}>
+        <span class="odot"></span>
+        {pocketRestarting ? 'restarting…' : pocketDown ? 'the on-device backend is down — tap to restart' : 'not responding — tap to restart'}
+      </button>
+    {:else if pocketOn && claudeAuthed === false}
+      <button class="nudge" onclick={() => (settingsOpen = true)}>
+        <span class="odot"></span>
+        Claude isn't signed in on this phone — tap to log in
+      </button>
+    {/if}
 
     <main bind:this={mainEl} ontouchstart={tstart} ontouchmove={tmove} ontouchend={tend} ontouchcancel={tend}>
       {#if pull > 0 || refreshing}
@@ -298,8 +353,11 @@
           {/if}
           {#if standalone && pocketOn}
             <h2 class="apph">Claude</h2>
+            {#if claudeAuthed}
+              <p class="kv"><span>Account</span><code>signed in</code></p>
+            {/if}
             {#if !login.url}
-              <button class="unpair checkupd" onclick={loginStart} disabled={login.busy}>{login.busy ? 'starting…' : 'Log in to Claude'}</button>
+              <button class="unpair checkupd" onclick={loginStart} disabled={login.busy}>{login.busy ? 'starting…' : claudeAuthed ? 'Log in again' : 'Log in to Claude'}</button>
             {:else}
               <button class="getupd" onclick={() => openLoginUrl(login.url)}>Open the login page</button>
               <p class="hint">Approve there, copy the code, paste it below.</p>
@@ -329,6 +387,10 @@
         </div>
       </Sheet>
     {/if}
+
+    {#if toast.msg}
+      <div class="toast" role="status">{toast.msg}</div>
+    {/if}
   </div>
 {/if}
 
@@ -342,8 +404,15 @@
   .off { color: var(--text-dim); }
   .ldot { width: 6px; height: 6px; border-radius: 50%; background: var(--mercury); animation: breathe 2.4s ease-in-out infinite; }
   .odot { width: 6px; height: 6px; border-radius: 50%; background: var(--alert); }
-  .gear { background: none; border: 0; color: var(--text-faint); font-size: 15px; width: 42px; height: 42px; cursor: pointer; }
+  .gear { background: none; border: 0; color: var(--text-faint); font-size: 15px; width: 42px; height: 42px; cursor: pointer; display: inline-grid; place-items: center; }
+  .pdot2 { width: 6px; height: 6px; border-radius: 50%; background: var(--text-faint); animation: breathe 2.4s ease-in-out infinite; }
   @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+
+  .nudge { flex: none; display: flex; align-items: center; gap: 9px; width: 100%; min-height: 40px; padding: 0 var(--s3); background: var(--surface); border: 0; border-bottom: 1px solid var(--seam); color: var(--text-dim); font: var(--w-reg) 12px var(--sans); text-align: left; cursor: pointer; }
+  .nudge:disabled { opacity: .6; }
+
+  .toast { position: fixed; left: 50%; bottom: calc(72px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 50; max-width: 86vw; background: var(--paper); color: var(--ink); font: var(--w-med) 12.5px var(--sans); padding: 11px 18px; border-radius: var(--pill); box-shadow: 0 4px 24px rgba(0,0,0,.35); animation: fade .16s ease both; }
+  @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 
   main { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
   .ptr { display: grid; place-items: center; overflow: hidden; transition: height .18s ease; }

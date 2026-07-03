@@ -7,11 +7,13 @@
   import { pocketAvailable, startPocket } from '../lib/pocket.js';
   import { parsePairInput, SERVER_KEY, TOKEN_KEY } from '../lib/serverBase.mjs';
 
-  let { onPaired } = $props();
+  let { onPaired, initialError = '' } = $props();
 
   let input = $state('');
   let busy = $state(false);
-  let error = $state('');
+  // Seeded with the cold-boot failure (main.js): the operator lands here knowing WHY the phone
+  // backend didn't come up, with "Run on this phone" as the retry.
+  let error = $state(initialError);
   let scanning = $state(false);
   let videoEl = $state(null);
   let stream = null, scanTimer = null;
