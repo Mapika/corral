@@ -135,6 +135,19 @@ if [[ -n "$(ls -A "$PYDATA/usr/lib" 2>/dev/null)" ]]; then
   echo "data $DATA_SHA libpocketdata_tgz.so" >>"$MAP"
 fi
 
+# --- system-tool shims: am/pm/dumpsys/content break under our LD_LIBRARY_PATH -------------
+# The runtime env points LD_LIBRARY_PATH at the termux libs (node/claude need it), and system
+# binaries inherit it — termux libc++ & co. shadow the system ones and the linker dies
+# ("cannot locate symbol ... libunwindstack.so"). Each shim execs the system binary with a
+# clean library path. They're shebang scripts riding jniLibs: nativeLibraryDir files are
+# executable and the kernel's shebang handling doesn't care that the filename says .so.
+for tool in am pm dumpsys content settings cmd service input; do
+  shim="$JNI/lib${tool}_shim_exec.so"
+  printf '#!/system/bin/sh\nunset LD_LIBRARY_PATH\nexec /system/bin/%s "$@"\n' "$tool" >"$shim"
+  chmod 755 "$shim"
+  echo "bin $tool lib${tool}_shim_exec.so" >>"$MAP"
+done
+
 # --- claude code: native musl binary + musl loader ------------------------
 # The npm package is a platform-binary installer these days; none of its optionalDeps match
 # android, so we ship the linux-arm64-musl binary in the APK and exec it through Alpine's musl
