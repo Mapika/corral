@@ -1,16 +1,31 @@
 <script>
-  // Ranch a new agent from the phone: host, project, agent, permission mode — recents first, and
-  // every project remembers the combo it was last launched with, so the common case is two taps.
-  import { launchSession } from '../lib/api.js';
+  // Ranch a new agent from the phone: where (any host on any paired ranch), project, agent,
+  // permission mode — recents first, and every project remembers the combo it was last launched
+  // with, so the common case is two taps.
   import { apiErrorMessage } from '../lib/apiRequest.mjs';
   import { LAUNCH_DEFAULTS_KEY, launchDefaultsFor, parseLaunchDefaults, rememberLaunchDefaults, serializeLaunchDefaults } from '../lib/launchDefaults.mjs';
   import { AGENTS, MODELS, PERMS } from '../lib/launchOptions.mjs';
   import { recentRootsForHost } from '../lib/recentRoots.mjs';
   import Sheet from './Sheet.svelte';
 
-  let { data, onclose, onLaunched, initialDir = '', initialBrief = '' } = $props();
+  let { data, onclose, onLaunched, initialDir = '', initialBrief = '', initialRanch = '' } = $props();
 
-  let host = $state('local');
+  // Everywhere an agent can run: each ranch's own box, then that ranch's ssh hosts.
+  let multi = $derived(data.d.ranches.length > 1);
+  let targets = $derived(data.d.ranches.flatMap((r) => [
+    { ranch: r.id, host: 'local', kind: r.kind, home: r.localHome, label: multi ? r.name : r.kind === 'pocket' ? 'this phone' : 'this computer' },
+    ...r.hosts.map((h) => ({ ranch: r.id, host: h, kind: r.kind, home: '~', label: (multi ? r.name + ' · ' : '') + h })),
+  ]));
+  // The selection is a {ranch, host} pointer; the target itself is derived so its label/home
+  // stay live as hosts load in (and the pointer heals if its ranch gets unpaired mid-sheet).
+  let picked = $state(null);
+  let sel = $derived((picked && targets.find((t) => t.ranch === picked.ranch && t.host === picked.host)) || null);
+  $effect(() => {
+    if (sel || !targets.length) return;
+    const first = targets.find((t) => t.ranch === initialRanch && t.host === 'local') || targets[0];
+    picked = { ranch: first.ranch, host: first.host };
+  });
+
   // svelte-ignore state_referenced_locally
   let dir = $state(initialDir);
   // optional first instruction — the agent starts on it immediately. Seeded by Share -> Corral.
@@ -23,35 +38,39 @@
   let busy = $state(false);
   let error = $state('');
 
-  let hosts = $derived(['local', ...data.d.hosts]);
-  let roots = $derived(recentRootsForHost({ host, roots: data.d.recentRoots, sessions: data.d.sessions }));
+  let roots = $derived(sel ? recentRootsForHost({ ranch: sel.ranch, host: sel.host, roots: data.d.recentRoots, sessions: data.d.sessions }) : []);
   let models = $derived(MODELS[agent] || MODELS.claude);
 
   let defaults = {};
   try { defaults = parseLaunchDefaults(localStorage.getItem(LAUNCH_DEFAULTS_KEY)); } catch (e) {}
 
+  // The origin ranch keeps unscoped default keys (shared with pre-0.6 data); others scope by id.
+  const ranchScope = (t) => (t && t.kind !== 'origin' ? t.ranch : undefined);
+
   const setAgent = (v) => { agent = v; model = null; };
-  function pickHost(h) {
-    if (host !== h) { host = h; dir = ''; }
+  function pickTarget(t) {
+    if (!sel || sel.ranch !== t.ranch || sel.host !== t.host) { picked = { ranch: t.ranch, host: t.host }; dir = ''; }
   }
   function pickDir(d) {
     dir = d;
-    const known = launchDefaultsFor(defaults, host, d);
+    const known = sel && launchDefaultsFor(defaults, sel.host, d, ranchScope(sel));
     if (!known) return;
     agent = known.agent; perm = known.perm; worktree = known.worktree;
     model = (MODELS[known.agent] || []).some((m) => m.v === known.model) ? known.model : null;
   }
   async function go() {
-    const target = dir.trim() || (host === 'local' ? data.d.localHome : '~');
+    if (!sel) return;
+    const target = dir.trim() || (sel.host === 'local' ? sel.home : '~');
     busy = true; error = '';
     try {
-      const r = await launchSession({ host, dir: target, agent, model: model || undefined, perm, worktree: worktree && host === 'local', prompt: brief.trim() || undefined });
+      const r = await data.clientFor(sel.ranch).launchSession({ host: sel.host, dir: target, agent, model: model || undefined, perm, worktree: worktree && sel.host === 'local', prompt: brief.trim() || undefined });
       if (r?.ok === false) throw new Error(r.error || 'launch failed');
-      data.rememberRoot(host, target);
-      defaults = rememberLaunchDefaults(defaults, { host, dir: target, agent, perm, model, worktree: worktree && host === 'local' });
+      data.rememberRoot(sel.ranch, sel.host, target);
+      defaults = rememberLaunchDefaults(defaults, { ranch: ranchScope(sel), host: sel.host, dir: target, agent, perm, model, worktree: worktree && sel.host === 'local' });
       try { localStorage.setItem(LAUNCH_DEFAULTS_KEY, serializeLaunchDefaults(defaults)); } catch (e) {}
       await data.poll();
-      onLaunched?.({ kind: 'chat', id: r.id, agent, host, cwd: target, model: model || null, status: 'starting', sessionId: null });
+      const rn = data.d.ranches.find((x) => x.id === sel.ranch);
+      onLaunched?.({ kind: 'chat', id: r.id, ranch: sel.ranch, ranchName: multi && rn ? rn.name : null, agent, host: sel.host, cwd: target, model: model || null, status: 'starting', sessionId: null });
     } catch (e) {
       error = apiErrorMessage(e, 'Launch failed.');
     } finally {
@@ -64,8 +83,8 @@
   <div class="launch">
     <h2>Where</h2>
     <div class="chips">
-      {#each hosts as h (h)}
-        <button class="chip" class:on={host === h} onclick={() => pickHost(h)}>{h === 'local' ? 'this computer' : h}</button>
+      {#each targets as t (t.ranch + ':' + t.host)}
+        <button class="chip" class:on={sel && sel.ranch === t.ranch && sel.host === t.host} onclick={() => pickTarget(t)}>{t.label}</button>
       {/each}
     </div>
 
@@ -80,7 +99,7 @@
         {/each}
       </div>
     {/if}
-    <input class="dirin" bind:value={dir} placeholder={host === 'local' ? data.d.localHome : '~/project'} autocapitalize="off" autocorrect="off" spellcheck="false" />
+    <input class="dirin" bind:value={dir} placeholder={sel?.host === 'local' ? sel.home : '~/project'} autocapitalize="off" autocorrect="off" spellcheck="false" />
 
     <h2>First instruction</h2>
     <textarea class="brief" bind:value={brief} rows="2"
@@ -107,12 +126,12 @@
       {#each PERMS as p (p.v)}
         <button class="chip" class:on={perm === p.v} onclick={() => (perm = p.v)}>{p.l}</button>
       {/each}
-      {#if host === 'local'}
+      {#if sel?.host === 'local'}
         <button class="chip" class:on={worktree} onclick={() => (worktree = !worktree)}>Worktree</button>
       {/if}
     </div>
     {#if perm === 'default'}<p class="note">Ask pings your phone whenever the agent needs permission.</p>{/if}
-    {#if worktree && host === 'local'}<p class="note">Runs in a fresh git worktree — your tree stays untouched.</p>{/if}
+    {#if worktree && sel?.host === 'local'}<p class="note">Runs in a fresh git worktree — your tree stays untouched.</p>{/if}
 
     {#if error}<p class="err">{error}</p>{/if}
     <button class="go" onclick={go} disabled={busy}>{busy ? 'Ranching…' : 'Ranch'}</button>

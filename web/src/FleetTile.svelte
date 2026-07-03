@@ -6,7 +6,9 @@
   import { renderMarkdown } from './lib/markdown.js';
   import { agentLabel, sessionHostLabel, sessionPathParts, sessionStatusView } from './lib/sessionView.mjs';
 
-  let { session, onOpen } = $props();
+  // socket: (id) => WebSocket — the phone console passes a per-ranch factory; the desktop grid
+  // (one server) uses the default client's.
+  let { session, onOpen, socket = chatSocket, showRanch = false } = $props();
   let lines = $state([]);
   let bodyEl = $state(null);
   const tail = createTailState();
@@ -24,7 +26,7 @@
     Object.assign(tail, createTailState());   // fresh tail per connection: replay lands exactly once
     lines = [];
     let raf = 0;
-    const ws = chatSocket(id);
+    const ws = socket(id);
     ws.onmessage = (m) => {
       let ev;
       try { ev = JSON.parse(m.data); } catch (e) { return; }
@@ -41,7 +43,7 @@
   <header>
     <span class="dot {statusView.tone}"></span>
     <b>{session?.label || parts.project}</b>
-    <span class="host">{sessionHostLabel(session?.host)}</span>
+    <span class="host">{showRanch && session?.ranchName ? session.ranchName + ' · ' : ''}{sessionHostLabel(session?.host)}</span>
     <span class="agent">{agentLabel(session?.agent)} · {statusView.label}</span>
   </header>
   <div class="lines" bind:this={bodyEl}>

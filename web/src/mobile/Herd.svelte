@@ -1,8 +1,9 @@
 <script>
   // Home screen: what needs me, then what's alive, then the rest — decisions first, chrome never.
-  import { respondPermission, resumeSession, removeSession } from '../lib/api.js';
+  // The merged herd spans every paired ranch; actions route to the session's own server.
   import { showToast } from './nav.svelte.js';
   import { lastActiveLabel } from '../lib/operatorStatus.mjs';
+  import { sessionKey } from '../lib/ranches.mjs';
   import { agentLabel, sessionHostLabel, sessionPathParts, sessionStatusView } from '../lib/sessionView.mjs';
   import Shader from '../lib/Shader.svelte';
 
@@ -11,6 +12,8 @@
   let { data, onOpenSession, onLaunch } = $props();
 
   let sessions = $derived(data.d.sessions);
+  let multi = $derived(data.d.ranches.length > 1);
+  const where = (s) => (multi && s.ranchName ? s.ranchName + ' · ' : '') + sessionHostLabel(s.host);
   let waiting = $derived(sessions.filter((s) => s.pendingPerm));
   let attention = $derived(sessions.filter((s) => !s.pendingPerm && (s.status === 'error' || s.status === 'exited')));
   let active = $derived(sessions.filter((s) => !s.pendingPerm && (s.status === 'busy' || s.status === 'starting')));
@@ -21,34 +24,37 @@
   let runningCount = $derived(active.length + waiting.length);
 
   const project = (s) => s.label || sessionPathParts(s.cwd).project;
-  let acting = $state({});     // session id -> in-flight action guard
+  let acting = $state({});     // ranch:session key -> in-flight action guard
 
   // Decision actions are optimistic — the card reacts under the thumb, the round-trip settles
   // behind it, and the next poll reconciles either way.
   async function respond(s, decision) {
-    if (!s.pendingPerm || acting[s.id]) return;
+    const k = sessionKey(s);
+    if (!s.pendingPerm || acting[k]) return;
     buzz();
-    acting[s.id] = true;
+    acting[k] = true;
     const perm = s.pendingPerm;
     s.pendingPerm = null;
-    try { await respondPermission(s.id, perm.id, decision); await data.poll(); }
+    try { await data.clientFor(s.ranch).respondPermission(s.id, perm.id, decision); await data.poll(); }
     catch (e) { onOpenSession?.(s); }          // prompt already answered/changed — resolve it in the chat
-    finally { delete acting[s.id]; }
+    finally { delete acting[k]; }
   }
   async function revive(s) {
-    if (acting[s.id]) return;
-    acting[s.id] = true;
-    try { await resumeSession(s.id); await data.poll(); onOpenSession?.({ ...s, status: 'starting' }); }
+    const k = sessionKey(s);
+    if (acting[k]) return;
+    acting[k] = true;
+    try { await data.clientFor(s.ranch).resumeSession(s.id); await data.poll(); onOpenSession?.({ ...s, status: 'starting' }); }
     catch (e) { showToast('Could not resume this session.'); }
-    finally { delete acting[s.id]; }
+    finally { delete acting[k]; }
   }
   async function dismiss(s) {
-    if (acting[s.id]) return;
-    acting[s.id] = true;
-    data.d.sessions = data.d.sessions.filter((x) => x.id !== s.id);
-    try { await removeSession(s.id); await data.poll(); }
+    const k = sessionKey(s);
+    if (acting[k]) return;
+    acting[k] = true;
+    data.d.sessions = data.d.sessions.filter((x) => sessionKey(x) !== k);
+    try { await data.clientFor(s.ranch).removeSession(s.id); await data.poll(); }
     catch (e) { showToast('Could not dismiss — it stays in the herd.'); await data.poll(); }
-    finally { delete acting[s.id]; }
+    finally { delete acting[k]; }
   }
 </script>
 
@@ -84,7 +90,7 @@
   {#if waiting.length || attention.length}
     <section>
       <h2>Needs you</h2>
-      {#each waiting as s (s.id)}
+      {#each waiting as s (sessionKey(s))}
         <div class="card">
           <button class="cbody" onclick={() => onOpenSession?.(s)}>
             <span class="dot ask"></span>
@@ -93,17 +99,17 @@
               <span class="csub">{agentLabel(s.agent)} wants to use <code>{s.pendingPerm.tool}</code>{#if s.pendingPerm.count > 1} (+{s.pendingPerm.count - 1} more){/if}</span>
               {#if s.pendingPerm.summary}<span class="csub"><code>{s.pendingPerm.summary}</code></span>{/if}
             </span>
-            <span class="chost">{sessionHostLabel(s.host)}</span>
+            <span class="chost">{where(s)}</span>
           </button>
           <div class="cactions">
-            <button class="deny" onclick={() => respond(s, 'deny')} disabled={!!acting[s.id]}>Deny</button>
+            <button class="deny" onclick={() => respond(s, 'deny')} disabled={!!acting[sessionKey(s)]}>Deny</button>
             <span class="sp"></span>
-            <button class="quiet" onclick={() => respond(s, 'allow-always')} disabled={!!acting[s.id]}>Always</button>
-            <button class="allow" onclick={() => respond(s, 'allow')} disabled={!!acting[s.id]}>Allow</button>
+            <button class="quiet" onclick={() => respond(s, 'allow-always')} disabled={!!acting[sessionKey(s)]}>Always</button>
+            <button class="allow" onclick={() => respond(s, 'allow')} disabled={!!acting[sessionKey(s)]}>Allow</button>
           </div>
         </div>
       {/each}
-      {#each attention as s (s.id)}
+      {#each attention as s (sessionKey(s))}
         <div class="card">
           <button class="cbody" onclick={() => onOpenSession?.(s)}>
             <span class="dot err"></span>
@@ -111,12 +117,12 @@
               <b>{project(s)}</b>
               <span class="csub">{sessionStatusView(s.status).label} · {lastActiveLabel(s.updatedAt)}</span>
             </span>
-            <span class="chost">{sessionHostLabel(s.host)}</span>
+            <span class="chost">{where(s)}</span>
           </button>
           <div class="cactions">
-            <button class="deny" onclick={() => dismiss(s)} disabled={!!acting[s.id]}>Dismiss</button>
+            <button class="deny" onclick={() => dismiss(s)} disabled={!!acting[sessionKey(s)]}>Dismiss</button>
             <span class="sp"></span>
-            {#if s.sessionId}<button class="allow" onclick={() => revive(s)} disabled={!!acting[s.id]}>Resume</button>{/if}
+            {#if s.sessionId}<button class="allow" onclick={() => revive(s)} disabled={!!acting[sessionKey(s)]}>Resume</button>{/if}
           </div>
         </div>
       {/each}
@@ -126,14 +132,14 @@
   {#if active.length || idle.length}
     <section>
       <h2>Alive</h2>
-      {#each [...active, ...idle] as s (s.id)}
+      {#each [...active, ...idle] as s (sessionKey(s))}
         <button class="row" onclick={() => onOpenSession?.(s)}>
           <span class="dot {sessionStatusView(s.status).tone}"></span>
           <span class="cmain">
             <b>{project(s)}</b>
             <span class="csub">{agentLabel(s.agent)} · {sessionStatusView(s.status).label} · {lastActiveLabel(s.updatedAt)}</span>
           </span>
-          <span class="chost">{sessionHostLabel(s.host)}</span>
+          <span class="chost">{where(s)}</span>
         </button>
       {/each}
     </section>
@@ -142,14 +148,14 @@
   {#if rest.length}
     <section>
       <h2>Rested</h2>
-      {#each rest.slice(0, 20) as s (s.id)}
+      {#each rest.slice(0, 20) as s (sessionKey(s))}
         <button class="row" onclick={() => onOpenSession?.(s)}>
           <span class="dot dormant"></span>
           <span class="cmain">
             <b>{project(s)}</b>
             <span class="csub">{agentLabel(s.agent)} · {lastActiveLabel(s.updatedAt)}</span>
           </span>
-          <span class="chost">{sessionHostLabel(s.host)}</span>
+          <span class="chost">{where(s)}</span>
         </button>
       {/each}
     </section>

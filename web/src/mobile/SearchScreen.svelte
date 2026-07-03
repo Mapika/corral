@@ -1,12 +1,12 @@
 <script>
   // "Which session talked about X?" — debounced full-text search across past transcripts,
-  // couch-sized. A hit still on the roster opens that session; anything else offers a fresh
-  // ranch in the hit's folder.
-  import { searchHistory } from '../lib/api.js';
+  // couch-sized, fanned out to every paired ranch at once. A hit still on the roster opens that
+  // session; anything else offers a fresh ranch in the hit's folder (on the hit's server).
   import { apiErrorMessage } from '../lib/apiRequest.mjs';
   import Icon from '../lib/Icon.svelte';
 
   let { data, onclose, onOpenSession, onRanchAt } = $props();
+  let multi = $derived(data.d.ranches.length > 1);
 
   let q = $state('');
   let hits = $state([]);
@@ -18,15 +18,23 @@
 
   const base = (p) => String(p || '').split(/[\\/]/).filter(Boolean).pop() || '';
   const when = (t) => (t ? new Date(t).toLocaleDateString() : '');
-  const rosterFor = (hit) => data.d.sessions.find((s) => s.sessionId === hit.sessionId) || null;
+  const rosterFor = (hit) => data.d.sessions.find((s) => s.sessionId === hit.sessionId && (!hit.ranch || s.ranch === hit.ranch)) || null;
 
   async function run(query) {
     searching = true; error = '';
-    try {
-      const r = await searchHistory(query);
-      hits = r.hits || [];
-      searched = query;
-    } catch (e) { error = apiErrorMessage(e, 'Search failed.'); }
+    const ranches = [...data.d.ranches];
+    const results = await Promise.allSettled(ranches.map((r) => data.clientFor(r.id).searchHistory(query)));
+    const merged = [];
+    let anyOk = false, firstErr = null;
+    results.forEach((res, i) => {
+      if (res.status === 'fulfilled') {
+        anyOk = true;
+        for (const h of res.value.hits || []) merged.push({ ...h, ranch: ranches[i].id, ranchName: ranches[i].name });
+      } else if (!firstErr) firstErr = res.reason;
+    });
+    // Partial results beat an error page: only fail the search when EVERY ranch failed.
+    if (!anyOk && firstErr) { error = apiErrorMessage(firstErr, 'Search failed.'); }
+    else { hits = merged.sort((a, b) => (b.mtime || 0) - (a.mtime || 0)); searched = query; }
     searching = false;
   }
   $effect(() => {
@@ -55,15 +63,15 @@
     {:else if searched && hits.length === 0}
       <p class="state">No matches.</p>
     {:else if !q.trim()}
-      <p class="state">Full-text search across everything your agents have said and done on the ranch computer.</p>
+      <p class="state">Full-text search across everything your agents have said and done{multi ? ', on every ranch at once' : ' on the ranch computer'}.</p>
     {/if}
 
-    {#each hits as h (h.sessionId)}
+    {#each hits as h ((h.ranch || '') + ':' + h.sessionId)}
       {@const roster = rosterFor(h)}
-      <button class="hit" onclick={() => (roster ? onOpenSession?.(roster) : h.cwd && onRanchAt?.(h.cwd))}>
+      <button class="hit" onclick={() => (roster ? onOpenSession?.(roster) : h.cwd && onRanchAt?.(h.cwd, h.ranch))}>
         <span class="ttl">
           <b>{base(h.cwd) || h.sessionId.slice(0, 8)}</b>
-          <span class="date">{when(h.mtime)}</span>
+          <span class="date">{multi && h.ranchName ? h.ranchName + ' · ' : ''}{when(h.mtime)}</span>
         </span>
         {#each h.matches.slice(0, 2) as m}
           <span class="snippet"><span class="role">{m.role}</span>{m.snippet}</span>

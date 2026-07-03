@@ -26,6 +26,7 @@
   let chat = $state(null);           // full-screen session descriptor
   let launchOpen = $state(false);
   let launchDir = $state('');        // prefill from a history hit ("Ranch here")
+  let launchRanch = $state('');      // …on the ranch that hit came from
   let searchOpen = $state(false);
   let settingsOpen = $state(false);
   // #session=<id> deep link — a push notification's Click target. Resolved once the roster
@@ -173,7 +174,8 @@
     pull = 0;
   }
 
-  const chatDesc = (s) => ({ kind: 'chat', id: s.id, ranch: s.ranch, ranchName: s.ranchName, agent: s.agent || 'claude', host: s.host, cwd: s.cwd, model: s.model, status: s.status, sessionId: s.sessionId, label: s.label || null });
+  // ranchName rides along only when there's something to disambiguate — one ranch, no chrome.
+  const chatDesc = (s) => ({ kind: 'chat', id: s.id, ranch: s.ranch, ranchName: ranchCount > 1 ? s.ranchName : null, agent: s.agent || 'claude', host: s.host, cwd: s.cwd, model: s.model, status: s.status, sessionId: s.sessionId, label: s.label || null });
   async function openSession(s) {
     let next = s;
     if (s.status === 'dormant' || isResumableSession(s)) {
@@ -408,14 +410,14 @@
       <SearchScreen {data}
         onclose={() => (searchOpen = false)}
         onOpenSession={(s) => { searchOpen = false; openSession(s); }}
-        onRanchAt={(cwd) => { searchOpen = false; launchDir = cwd; launchOpen = true; }} />
+        onRanchAt={(cwd, ranch) => { searchOpen = false; launchDir = cwd; launchRanch = ranch || ''; launchOpen = true; }} />
     {/if}
 
     {#if launchOpen}
-      {#key launchDir + sharedBrief}
-        <LaunchSheet {data} initialDir={launchDir} initialBrief={sharedBrief}
-          onclose={() => { launchOpen = false; launchDir = ''; sharedBrief = ''; }}
-          onLaunched={(desc) => { launchOpen = false; launchDir = ''; sharedBrief = ''; chat = desc; }} />
+      {#key launchDir + launchRanch + sharedBrief}
+        <LaunchSheet {data} initialDir={launchDir} initialRanch={launchRanch} initialBrief={sharedBrief}
+          onclose={() => { launchOpen = false; launchDir = ''; launchRanch = ''; sharedBrief = ''; }}
+          onLaunched={(desc) => { launchOpen = false; launchDir = ''; launchRanch = ''; sharedBrief = ''; chat = desc; }} />
       {/key}
     {/if}
 

@@ -2,7 +2,7 @@
   // Full-screen chat: the same wire protocol as the desktop view (lib/chatStream.mjs), reshaped
   // for a thumb — sticky composer, and permission prompts docked as a decision sheet above it.
   import { untrack } from 'svelte';
-  import { chatSocket, gitDiff, killSession, removeSession, resumeSession, setSessionLabel, uploadFile } from '../lib/api.js';
+  import { defaultClient } from '../lib/api.js';
   import { createChatState, handleChatEvent, openPermissions } from '../lib/chatStream.mjs';
   import { uploadMessage } from '../lib/fileUploads.mjs';
   import { highlightCode, renderMarkdown } from '../lib/markdown.js';
@@ -12,7 +12,8 @@
   import Sheet from './Sheet.svelte';
   import { pushOverlay, showToast } from './nav.svelte.js';
 
-  let { session, onclose, onchanged } = $props();
+  // client: the API client of the ranch this session lives on (defaults to the page's own server).
+  let { session, client = defaultClient, onclose, onchanged } = $props();
 
   let cs = $state(createChatState());
   let draft = $state('');
@@ -65,7 +66,7 @@
       atts.push({ name, pct: 0, done: false, error: false, message: '' });
       const rec = atts[atts.length - 1];   // the $state proxy — mutating the raw object is invisible to the UI
       try {
-        const r = await uploadFile(session.host, session.cwd, f, (p) => (rec.pct = p), name);
+        const r = await client.uploadFile(session.host, session.cwd, f, (p) => (rec.pct = p), name);
         if (r && r.ok) rec.done = true; else { rec.error = true; rec.message = uploadMessage(r); }
       } catch (e) { rec.error = true; rec.message = uploadMessage(e); }
     }
@@ -100,28 +101,28 @@
     const next = labelDraft.trim().slice(0, 60);
     const effective = next && next !== parts.project ? next : null;   // folder name = no label
     if (effective === label) return;
-    try { await setSessionLabel(session.id, effective || ''); label = effective; onchanged?.(); }
+    try { await client.setSessionLabel(session.id, effective || ''); label = effective; onchanged?.(); }
     catch (e) { showToast('Rename failed — try again.'); }
   }
   async function revive() {
     menuOpen = false;
-    try { await resumeSession(session.id); cs.status = 'starting'; onchanged?.(); }
+    try { await client.resumeSession(session.id); cs.status = 'starting'; onchanged?.(); }
     catch (e) { showToast('Could not resume this session.'); }
   }
   async function end() {
     menuOpen = false;
-    try { await killSession(session.id); onchanged?.(); }
+    try { await client.killSession(session.id); onchanged?.(); }
     catch (e) { showToast('Could not end the session.'); }
   }
   async function removeIt() {
     menuOpen = false;
-    try { await removeSession(session.id); onchanged?.(); onclose?.(); }
+    try { await client.removeSession(session.id); onchanged?.(); onclose?.(); }
     catch (e) { showToast('Could not remove the session.'); }
   }
   async function openChanges() {
     menuOpen = false;
     changes = { loading: true };
-    try { changes = await gitDiff(session.host, session.cwd); } catch (e) { changes = { isRepo: false }; }
+    try { changes = await client.gitDiff(session.host, session.cwd); } catch (e) { changes = { isRepo: false }; }
   }
   // The diff subview is its own layer — hardware back closes it before the chat.
   $effect(() => {
@@ -136,7 +137,7 @@
     const connect = () => {
       cs = createChatState();
       cs.status = session.status || ''; cs.model = session.model || null;
-      sock = chatSocket(id);
+      sock = client.chatSocket(id);
       ws = sock;
       sock.onopen = () => { retries = 0; disconnected = false; };
       sock.onmessage = (e) => {
@@ -168,7 +169,7 @@
     <button class="back" onclick={() => onclose?.()} aria-label="Back"><Icon name="chevron-left" size={22} /></button>
     <div class="who">
       <b>{label || parts.project}</b>
-      <span>{sessionHostLabel(session.host)} · {agentLabel(session.agent)}{#if cs.model} · {prettyModel(cs.model)}{/if}</span>
+      <span>{session.ranchName ? session.ranchName + ' · ' : ''}{sessionHostLabel(session.host)} · {agentLabel(session.agent)}{#if cs.model} · {prettyModel(cs.model)}{/if}</span>
     </div>
     <span class="stat {statusView.tone}" title={statusView.detail}><span class="lamp"></span>{statusView.label}</span>
     <button class="kebab" onclick={() => (menuOpen = true)} aria-label="Session actions"><Icon name="kebab" size={17} stroke={2.75} /></button>

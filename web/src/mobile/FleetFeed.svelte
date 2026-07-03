@@ -3,14 +3,15 @@
   // Tap opens the chat; press-and-hold opens quick actions (whoa there / end) without leaving
   // the feed. Reuses the desktop FleetTile (self-contained read-only tail over the chat socket).
   import FleetTile from '../FleetTile.svelte';
-  import { interruptSession, killSession } from '../lib/api.js';
   import { isLiveSession } from '../lib/operatorStatus.mjs';
+  import { sessionKey } from '../lib/ranches.mjs';
   import { sessionHostLabel, sessionPathParts } from '../lib/sessionView.mjs';
   import Sheet from './Sheet.svelte';
   import { showToast } from './nav.svelte.js';
 
   let { data, onOpenSession, onLaunch } = $props();
   let live = $derived(data.d.sessions.filter((s) => isLiveSession(s)));
+  let multi = $derived(data.d.ranches.length > 1);
 
   let actions = $state(null);        // session under the long-press action sheet
   let pressTimer = null;
@@ -32,12 +33,12 @@
   }
   async function whoa(s) {
     actions = null;
-    try { await interruptSession(s.id); await data.poll(); }
+    try { await data.clientFor(s.ranch).interruptSession(s.id); await data.poll(); }
     catch (e) { showToast('Could not stop the turn.'); }
   }
   async function end(s) {
     actions = null;
-    try { await killSession(s.id); await data.poll(); }
+    try { await data.clientFor(s.ranch).killSession(s.id); await data.poll(); }
     catch (e) { showToast('Could not end the session.'); }
   }
 </script>
@@ -54,11 +55,11 @@
       </div>
     {/if}
   {:else}
-    {#each live as s (s.id)}
+    {#each live as s (sessionKey(s))}
       <div class="cell" role="presentation"
            onpointerdown={() => down(s)} onpointerup={cancelPress} onpointercancel={cancelPress}
            onpointerleave={cancelPress} oncontextmenu={(e) => e.preventDefault()}>
-        <FleetTile session={s} onOpen={() => openTile(s)} />
+        <FleetTile session={s} onOpen={() => openTile(s)} socket={data.clientFor(s.ranch).chatSocket} showRanch={multi} />
       </div>
     {/each}
   {/if}
@@ -69,7 +70,7 @@
     <div class="menu">
       <div class="who">
         <b>{actions.label || sessionPathParts(actions.cwd).project}</b>
-        <span>{sessionHostLabel(actions.host)}</span>
+        <span>{multi && actions.ranchName ? actions.ranchName + ' · ' : ''}{sessionHostLabel(actions.host)}</span>
       </div>
       <button onclick={() => { const s = actions; actions = null; onOpenSession?.(s); }}>Open</button>
       {#if actions.status === 'busy' || actions.status === 'starting'}
