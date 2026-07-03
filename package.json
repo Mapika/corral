@@ -1,7 +1,7 @@
 {
   "name": "corral",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.6.1",
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
