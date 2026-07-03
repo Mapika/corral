@@ -127,19 +127,28 @@ jobs:
           python3 - "$MAIN" <<'EOF'
           import re, sys
           p = sys.argv[1]; s = open(p).read()
-          body = '''class MainActivity : TauriActivity() {
-            override fun onCreate(savedInstanceState: android.os.Bundle?) {
-              super.onCreate(savedInstanceState)
-              try { PocketBridge.init(applicationContext) } catch (e: Throwable) {
+          init = '''try { PocketBridge.init(applicationContext) } catch (e: Throwable) {
                 android.util.Log.w("PocketBridge", "init failed: " + e)
-              }
-            }
-          }'''
-          s2 = re.sub(r'class MainActivity\s*:\s*TauriActivity\(\)\s*(\{\s*\})?\s*$', body, s, flags=re.M)
-          if s2 == s:
-              raise SystemExit('MainActivity pattern not found - tauri template changed?')
-          open(p, 'w').write(s2)
-          print(s2)
+              }'''
+          if 'PocketBridge' not in s:
+              needle = 'super.onCreate(savedInstanceState)'
+              if needle in s:
+                  # current template: MainActivity already overrides onCreate
+                  s = s.replace(needle, needle + '\n    ' + init, 1)
+              else:
+                  # older template: body-less class declaration
+                  body = ('class MainActivity : TauriActivity() {\n'
+                          '  override fun onCreate(savedInstanceState: android.os.Bundle?) {\n'
+                          '    super.onCreate(savedInstanceState)\n'
+                          '    ' + init + '\n'
+                          '  }\n'
+                          '}')
+                  s2 = re.sub(r'class MainActivity\s*:\s*TauriActivity\(\)\s*(\{\s*\})?\s*$', body, s, flags=re.M)
+                  if s2 == s:
+                      raise SystemExit('MainActivity pattern not found - tauri template changed?')
+                  s = s2
+              open(p, 'w').write(s)
+          print(s)
           EOF
           MANIFEST=src-tauri/gen/android/app/src/main/AndroidManifest.xml
           sed -i 's#<uses-permission android:name="android.permission.INTERNET" */>#<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />#' "$MANIFEST"
