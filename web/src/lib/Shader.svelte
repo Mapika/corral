@@ -62,7 +62,8 @@
     const uRes = gl.getUniformLocation(prog, 'u_res');
     const uTime = gl.getUniformLocation(prog, 'u_time');
 
-    const dpr = Math.min(devicePixelRatio || 1, 2);
+    // Ambient soft-noise field: extra dpr is invisible, its GPU cost (phone battery) isn't.
+    const dpr = 1;
     const resize = () => {
       const w = canvas.clientWidth * dpr, h = canvas.clientHeight * dpr;
       if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; gl.viewport(0, 0, w, h); }
@@ -74,13 +75,18 @@
 
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
     const still = reduced || !run;              // one static frame: frozen liquid metal
-    let raf, start = null;
+    let raf, start = null, last = 0;
     const frame = (ts) => {
       if (start === null) start = ts;
+      if (!still) {
+        raf = requestAnimationFrame(frame);
+        // ~30fps: indistinguishable for a t*0.05 flow, halves the GPU wakeups.
+        if (ts - last < 33) return;
+        last = ts;
+      }
       resize();
       gl.uniform1f(uTime, still ? 8 : (ts - start) / 1000);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
-      if (!still) raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
     return () => { cancelAnimationFrame(raf); ro.disconnect(); };

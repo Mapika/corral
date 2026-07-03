@@ -168,8 +168,9 @@ fn extract_payload(root: &Path) -> Result<(), String> {
 }
 
 // Recreate the real binary/library names as symlinks pointing into nativeLibraryDir, per
-// runtime-map.txt ("kind original packed" lines, kinds bin|lib). Rebuilt on every start — the
-// map changes across APK updates and symlinks are cheap.
+// runtime-map.txt ("kind original packed" lines; kinds bin|lib|dyn — dyn is a python extension
+// module symlinked into the extracted stdlib tree, dlopen through a symlink passes W^X the same
+// way exec does). Rebuilt on every start — the map changes across APK updates, symlinks are cheap.
 fn link_runtime(root: &Path, native: &Path) -> Result<(PathBuf, PathBuf), String> {
     let map = std::fs::read_to_string(root.join("backend/runtime-map.txt")).map_err(|e| e.to_string())?;
     let (bin, lib) = (root.join("rt/bin"), root.join("rt/lib"));
@@ -180,11 +181,49 @@ fn link_runtime(root: &Path, native: &Path) -> Result<(PathBuf, PathBuf), String
         if f.len() != 3 {
             continue;
         }
-        let link = (if f[0] == "bin" { &bin } else { &lib }).join(f[1]);
+        let link = match f[0] {
+            "bin" => bin.join(f[1]),
+            "lib" => lib.join(f[1]),
+            "dyn" => {
+                let dest = root.join("py").join(f[1]);
+                if let Some(p) = dest.parent() {
+                    let _ = std::fs::create_dir_all(p);
+                }
+                dest
+            }
+            _ => continue, // "data" lines are extract_runtime_data's business
+        };
         let _ = std::fs::remove_file(&link);
         std::os::unix::fs::symlink(native.join(f[2]), &link).map_err(|e| e.to_string())?;
     }
     Ok((bin, lib))
+}
+
+// Non-ELF runtime data (python stdlib + site-packages, TLS bundle) rides jniLibs as a fake
+// lib*.so tarball — the one channel into the APK that needs no extra plumbing — and is
+// extracted to <root>/py once per content change ("data <sha> <packed>" map line).
+fn extract_runtime_data(root: &Path, native: &Path) -> Result<(), String> {
+    let map = std::fs::read_to_string(root.join("backend/runtime-map.txt")).map_err(|e| e.to_string())?;
+    let Some(f) = map
+        .lines()
+        .map(|l| l.split_whitespace().collect::<Vec<_>>())
+        .find(|f| f.len() == 3 && f[0] == "data")
+    else {
+        return Ok(()); // this build ships no data tree
+    };
+    let (sha, packed) = (f[1], f[2]);
+    let py = root.join("py");
+    let sha_file = root.join("py.sha");
+    if py.is_dir() && std::fs::read_to_string(&sha_file).ok().as_deref() == Some(sha) {
+        return Ok(());
+    }
+    let _ = std::fs::remove_dir_all(&py);
+    std::fs::create_dir_all(&py).map_err(|e| e.to_string())?;
+    let src = std::fs::File::open(native.join(packed)).map_err(|e| e.to_string())?;
+    let tarball = flate2::read::GzDecoder::new(src);
+    tar::Archive::new(tarball).unpack(&py).map_err(|e| format!("data extract: {e}"))?;
+    std::fs::write(&sha_file, sha).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // SIGTERM with a short grace period, then SIGKILL — a half-dead node still holding its port
@@ -283,10 +322,21 @@ fn apply_runtime_env(cmd: &mut Command, root: &Path, native: &Path) {
         .env("USE_BUILTIN_RIPGREP", "0") // claude's npm-shipped rg is glibc; the bionic one on PATH works
         .env("DISABLE_AUTOUPDATER", "1") // runtime updates ride APK updates (Play policy)
         .env("DISABLE_TELEMETRY", "1");
+    // Python (pocket builds that ship it): the termux build bakes a com.termux prefix, so the
+    // stdlib is only findable via PYTHONHOME; ssl needs an explicit cert bundle (no /etc/ssl).
+    let py = root.join("py/usr");
+    if py.is_dir() {
+        cmd.env("PYTHONHOME", s(&py));
+        let cert = py.join("etc/tls/cert.pem");
+        if cert.is_file() {
+            cmd.env("SSL_CERT_FILE", s(&cert));
+        }
+    }
 }
 
 fn spawn_backend(root: &Path, native: &Path) -> Result<Run, String> {
     extract_payload(root)?;
+    extract_runtime_data(root, native)?; // before link_runtime — dyn symlinks land in this tree
     let (rt_bin, _rt_lib) = link_runtime(root, native)?;
     let home = root.join("home");
     let tmp = root.join("tmp");
@@ -473,7 +523,9 @@ fn start_watchdog(app: tauri::AppHandle) {
         use tauri::{Emitter, Manager};
         let mut active = false; // wakelock mirror — flip only on change
         loop {
-            std::thread::sleep(std::time::Duration::from_secs(3));
+            // Adaptive cadence: tight while agents work (fast death detection, fresh wakelock),
+            // relaxed while idle — the health check itself must not keep an idle phone warm.
+            std::thread::sleep(std::time::Duration::from_secs(if active { 3 } else { 30 }));
             let state = app.state::<Pocket>();
             let mut guard = state.0.lock().unwrap();
             let Some(run) = guard.as_mut() else { break }; // stopped on purpose

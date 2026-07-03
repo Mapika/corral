@@ -19,10 +19,13 @@ RT="$ROOT/src-tauri/pocket/runtime"
 JNI="$RT/jniLibs/arm64-v8a"
 WORK="$ROOT/src-tauri/pocket/.runtime-work"
 # No npm: the backend needs no package installs at runtime, and claude is the musl binary.
-PKGS=(nodejs-lts ripgrep bash)
+# python(+pip): agents kept hitting "python: not found" — the ELF bits ride jniLibs like node,
+# the stdlib tree ships as a data tarball (see below). ca-certificates is wanted DATA now
+# (python's ssl needs a cert bundle; node bundles its own).
+PKGS=(nodejs-lts ripgrep bash python python-pip)
 # data-only / termux-specific packages we never need; "nodejs" is skipped so nothing drags in
 # the non-LTS node via a "nodejs | nodejs-lts" alternative.
-SKIP="termux-tools termux-am termux-exec termux-keyring termux-licenses ca-certificates resolv-conf command-not-found dpkg nodejs"
+SKIP="termux-tools termux-am termux-exec termux-keyring termux-licenses resolv-conf command-not-found dpkg nodejs"
 
 rm -rf "$RT" "$WORK"
 mkdir -p "$JNI" "$WORK/x"
@@ -89,6 +92,48 @@ for d in "$WORK"/x/*/data/data/com.termux/files/usr/bin; do
     echo "bin $base $packed" >>"$MAP"
   done
 done
+
+# --- usr/bin symlinks (python -> python3.12): alias onto the target's packed ELF ----------
+for d in "$WORK"/x/*/data/data/com.termux/files/usr/bin; do
+  [[ -d "$d" ]] || continue
+  for f in "$d"/*; do
+    [[ -L "$f" ]] || continue
+    real="$(readlink -f "$f")"
+    [[ -f "$real" ]] || continue
+    file -b "$real" | grep -q ELF || continue
+    echo "bin $(basename "$f") $(mangle "$(basename "$real")_exec")" >>"$MAP"
+  done
+done
+
+# --- python: extension modules ride jniLibs, the stdlib tree ships as data ----------------
+# lib-dynload/*.so must live in nativeLibraryDir (W^X: dlopen of app-data files is blocked at
+# targetSdk 29+); the app symlinks them back into the extracted tree per 'dyn' map lines (path
+# relative to the extracted root). Everything else — pure-python stdlib, pip's site-packages,
+# the TLS bundle — is plain data: packed as a fake lib*.so so it rides the same jniLibs channel
+# with zero extra CI plumbing, and extracted to filesDir at first boot ('data <sha> <packed>').
+PYDATA="$WORK/pydata"
+mkdir -p "$PYDATA/usr/lib"
+for d in "$WORK"/x/*/data/data/com.termux/files/usr; do
+  [[ -d "$d" ]] || continue
+  for py in "$d"/lib/python3*; do
+    [[ -d "$py" ]] || continue
+    cp -r "$py" "$PYDATA/usr/lib/"
+  done
+  if [[ -d "$d/etc" ]]; then mkdir -p "$PYDATA/usr/etc"; cp -rL "$d/etc/." "$PYDATA/usr/etc/" 2>/dev/null || true; fi
+done
+while IFS= read -r -d '' so; do
+  rel="${so#"$PYDATA"/}"
+  packed="$(mangle "$(basename "$so")")"
+  cp "$so" "$JNI/$packed"
+  rm "$so"
+  echo "dyn $rel $packed" >>"$MAP"
+done < <(find "$PYDATA/usr/lib" -path '*/lib-dynload/*.so' -print0 2>/dev/null)
+if [[ -n "$(ls -A "$PYDATA/usr/lib" 2>/dev/null)" ]]; then
+  tar -C "$PYDATA" -czf "$WORK/pocket-data.tar.gz" usr
+  DATA_SHA="$(sha256sum "$WORK/pocket-data.tar.gz" | cut -d' ' -f1)"
+  cp "$WORK/pocket-data.tar.gz" "$JNI/libpocketdata_tgz.so"
+  echo "data $DATA_SHA libpocketdata_tgz.so" >>"$MAP"
+fi
 
 # --- claude code: native musl binary + musl loader ------------------------
 # The npm package is a platform-binary installer these days; none of its optionalDeps match

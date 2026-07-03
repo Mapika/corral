@@ -1,6 +1,7 @@
 <script>
   // The phone console: HERD (decide) · RANCH (launch) · FLEET (watch), with chat as a full-screen
   // push. Built for thumbs on the Ink system — flush surfaces, seams, one warm signal.
+  import { untrack } from 'svelte';
   import { getServer, getWebPush, resumeSession, testWebPush, webPushSubscribe, webPushUnsubscribe } from '../lib/api.js';
   import { applicationServerKeyBytes, subscriptionParams } from '../lib/webPushClient.mjs';
   import { releaseUpdate, sessionFromDeepLink } from '../lib/appUpdate.mjs';
@@ -45,7 +46,9 @@
 
   $effect(() => {
     if (!paired) return;
-    data.start();
+    // untracked: start() synchronously calls poll(), which READS d.live — tracked, that makes
+    // this effect re-run on every socket delivery and flap the connection forever.
+    untrack(() => data.start());
     return () => data.stop();
   });
 
