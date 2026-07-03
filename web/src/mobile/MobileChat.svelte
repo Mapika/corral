@@ -334,7 +334,7 @@
   .kebab { flex: none; width: 44px; height: 46px; background: none; border: 0; color: var(--text-dim); cursor: pointer; display: grid; place-items: center; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
 
-  .scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+  .scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
   .col { padding: var(--s4) var(--s4) var(--s5); }
   .emptyturn { min-height: 40dvh; display: flex; flex-direction: column; justify-content: center; gap: 10px; }
   .emptyturn b { color: var(--text); font-size: clamp(30px, 9vw, 44px); line-height: 1; font-weight: var(--w-light); overflow-wrap: anywhere; }

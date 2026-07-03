@@ -16,10 +16,12 @@
 .prose blockquote { margin: .7em 0; padding-left: 16px; border-left: 2px solid var(--text-faint); color: var(--text-dim); }
 .prose hr { border: 0; border-top: 1px solid var(--hair); margin: 1.3em 0; }
 .prose code { font-family: var(--mono); font-size: .84em; background: var(--surface-2); padding: .1em .4em; }
-.prose pre { background: var(--frame); padding: 16px 18px; overflow: auto; margin: .8em 0; }
+/* Wide content must never push the conversation column sideways — a horizontal scrollbar on the
+   chat reads as a stray UI bar. Code wraps; tables (genuinely 2D) scroll inside their own box. */
+.prose pre { background: var(--frame); padding: 16px 18px; margin: .8em 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .prose pre code { background: none; padding: 0; font-size: 12.5px; line-height: 1.6; color: #e2e2e2; }
-.prose table { border-collapse: collapse; margin: .7em 0; font-size: .9em; }
-.prose th, .prose td { border: 1px solid var(--seam); padding: 6px 11px; text-align: left; }
+.prose table { display: block; max-width: 100%; width: fit-content; overflow-x: auto; border-collapse: collapse; margin: .7em 0; font-size: .9em; }
+.prose th, .prose td { border: 1px solid var(--seam); padding: 6px 11px; text-align: left; overflow-wrap: anywhere; }
 .prose th { font-weight: var(--w-semi); }
 
 /* monochrome code palette — global, shared by chat prose and the file previewer */

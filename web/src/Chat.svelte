@@ -465,7 +465,7 @@
   .untracked .ufile { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); }
   .diff { margin: 0; padding: var(--s3) var(--s4); background: var(--frame); font: 12px/1.55 var(--mono); color: #d8d8d8; white-space: pre; overflow-x: auto; }
 
-  .scroll { flex: 1; min-height: 0; overflow: auto; }
+  .scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
   .col { max-width: 728px; margin: 0 auto; padding: var(--s7) var(--s5) 132px; }
   .emptyturn { min-height: 42vh; display: flex; flex-direction: column; justify-content: center; gap: 12px; color: var(--text-faint); }
   .emptyturn b { display: block; color: var(--text); font-size: clamp(38px, 7vw, 82px); line-height: .92; font-weight: var(--w-light); letter-spacing: 0; overflow-wrap: anywhere; }
