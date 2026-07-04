@@ -20,8 +20,10 @@ jobs:
         include:
           # Apple silicon only — GitHub retired the Intel (macos-13) hosted runners.
           # Intel Mac users build from source; a universal build can come later.
+          # `app` rides along because the macOS UPDATER artifact is the tarred .app —
+          # dmg alone leaves darwin out of latest.json (bit v0.8.2's first cut).
           - platform: macos-latest
-            bundles: dmg
+            bundles: app,dmg
           - platform: ubuntu-22.04
             bundles: appimage,deb
           - platform: windows-latest
