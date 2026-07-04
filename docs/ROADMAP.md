@@ -1,8 +1,8 @@
-# Corral roadmap to 1.0
+# Corral roadmap
 
 The 1.0 promise: **trust your whole herd to it.** Someone runs their daily agent work through
-Corral on every machine they own and never thinks about the plumbing. Five pillars, roughly one
-minor version each; reach you (0.5) → everywhere (0.6) → trustably (0.7–0.9).
+Corral on every machine they own and never thinks about the plumbing. Beyond that, 2.0 points
+at something bigger: the herd stops being separate machines.
 
 ## 0.5 — reaches you anywhere *(shipped)*
 
@@ -14,29 +14,46 @@ alternative transport. Notification taps land on the session in both transports.
 
 Multi-server pairing: the herd spans the desktop, the homelab box, and the office machine, with
 one merged "needs you" list. Roster merging, per-server tokens, per-server connection state,
-conflict UX (re-pair = key refresh, name suffixing, namespaced session ids). Pocket mode joins
-the roster as "this phone" and coexists with paired desktops.
+conflict UX. Pocket mode — the agents running *on the phone itself* — joins the roster as
+"this phone" and coexists with paired desktops.
 
-## 0.7 — builds people can trust
+## 0.7 — the overnight ranch
 
-Windows signing + macOS notarization, Tauri updater on desktop (the APK's update check is the
-mobile half, shipped in 0.4). Release channels if the updater needs them.
+Corral stops being a viewer and becomes a dispatcher. A work queue: hand the herd a list of
+jobs, each runs as an agent session in its own git worktree, sequentially or overnight. Your
+phone buzzes when a run lands with the diff ready. A morning review surface answers "what did
+the herd do while I slept" — read the diff, keep it or bounce it, from the couch. Underneath:
+host telemetry (what's loaded, what's on battery) and projects-not-machines identity (a git
+remote is the same project wherever it's checked out). The desktop app learns to update itself.
 
-## 0.8 — depth where agents live
+## 0.8 — one computer, first steps
 
-Per-project permission defaults ("always allow Edit in this repo"), a queue for "run these three
-things tonight", worktree-first flows. Breadth (more agents) matters less than making the
-supported ones feel first-class.
+Corral picks the machine: launch (or queue) against a *project* and placement chooses the host
+that has the checkout, the agent, and free capacity — manual pick always one tap away.
+Wake-on-LAN so an always-on box can rouse the big machine when the queue needs muscle; the
+phone dispatches to the desktop when home, runs on-device when out. Per-project permission
+defaults ("always allow Edit in this repo").
 
 ## 0.9 — hardening
 
-Cert pinning for pairing, TLS-by-default guidance, an adversarial pass over SECURITY.md, a
-reliability bug-bash: sessions survive restarts and sleeps, reconnects always converge, the
-roster never drifts. "Never lose a session" is the actual bar for 1.0.
+Autonomy raises the stakes: an adversarial pass over SECURITY.md covering the queue and
+unattended runs, cert pinning for pairing, TLS-by-default guidance, and a reliability bug-bash —
+sessions survive restarts and sleeps, reconnects always converge, the roster never drifts.
+Code signing and notarization land here, once installs justify the certificates. "Never lose a
+session" is the actual bar for 1.0.
 
 ## 1.0 — stabilization
 
 No new surface; fix, polish, document.
+
+## 2.0 — the herd is one computer
+
+The horizon that makes the 0.7/0.8 plumbing intentional: a designated always-on member that
+owns the queue and schedules standing work ("every night: update deps, run the tests, open a
+diff") without burning anything while idle; sessions that follow you between devices — start on
+the desktop, continue on the phone on a plane, land it back on the homelab; the GPU box serving
+local models to agents anywhere in the herd. Solo-first, agent-work only, a human always at the
+review gate.
 
 ## Explicitly post-1.0
 
