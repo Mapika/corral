@@ -4,7 +4,7 @@
   // same bar renders without the window buttons. There is deliberately no second header below.
   import Icon from './Icon.svelte';
 
-  let { crumb = null, running = 0, back = null, onHome, onBack, onRunning, onPush, onPhone } = $props();
+  let { crumb = null, running = 0, back = null, onHome, onBack, onRunning, onPush, onPhone, update = '', updateError = '', onUpdate } = $props();
 
   const inTauri = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__;
   let appWin = null;
@@ -36,6 +36,9 @@
     <span class="crumb" data-tauri-drag-region>{crumb.name}<span class="chost">{crumb.host}</span></span>
   {/if}
   <span class="sp" data-tauri-drag-region></span>
+  {#if update}
+    <button class="upd" onclick={() => onUpdate?.()} title={updateError ? 'Last try failed: ' + updateError + ' — click to retry' : 'Download and restart into the new version'}>{update}</button>
+  {/if}
   {#if running}
     <button class="run" onclick={() => onRunning?.()} title="Show running sessions"><span class="livedot"></span>{running} running</button>
   {/if}
@@ -64,6 +67,8 @@
   .crumb { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--text); }
   .crumb .chost { margin-left: 9px; font: 10px var(--mono); color: var(--text-faint); }
   .sp { flex: 1; align-self: stretch; min-width: var(--s2); }
+  .upd { flex: none; height: 100%; background: none; border: 0; padding: 0 var(--s2); cursor: pointer; font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--mercury-flow); }
+  .upd:hover { color: var(--text); }
   .run { flex: none; display: inline-flex; align-items: center; gap: 7px; height: 100%; background: none; border: 0; padding: 0 var(--s2); cursor: pointer; font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--text); }
   .run:hover { color: var(--text-dim); }
   .livedot { width: 6px; height: 6px; border-radius: 50%; background: var(--mercury-flow); animation: breathe 2.4s ease-in-out infinite; }

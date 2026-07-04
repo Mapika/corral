@@ -1,6 +1,6 @@
 [package]
 name = "corral"
-version = "0.8.1"
+version = "0.8.2"
 description = "Ranch your AI coding agents"
 authors = ["Mark Marosi"]
 license = "MIT"
@@ -38,6 +38,8 @@ tauri = { version = "2.11.3", features = ["tray-icon", "image-png"] }
 tauri-plugin-shell = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 rand = "0.8"
 hex = "0.4"
 

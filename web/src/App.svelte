@@ -19,6 +19,7 @@
   import { apiErrorMessage } from './lib/apiRequest.mjs';
   import { copyOperatorBriefText, runOperatorRequest, syncIssueItems } from './lib/appShell.mjs';
   import { buildCommandItems } from './lib/commandItems.mjs';
+  import { updateLabel, updateReduce } from './lib/desktopUpdate.mjs';
   import { buildHostCards, needsHostStatusFollowUp } from './lib/hostHealth.mjs';
   import { isLiveSession, isResumableSession, operatorBriefText } from './lib/operatorStatus.mjs';
   import { agentLabel } from './lib/sessionView.mjs';
@@ -52,6 +53,33 @@
 
   let prevStatus = {};
   const inTauri = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__;
+
+  // Desktop self-update (0.8.2): one check at boot against the latest.json release asset; the
+  // titlebar pill drives download+install+relaunch. Browser pages never touch the plugin.
+  let updHandle = null;                 // the plugin's Update object (not reactive state)
+  let updState = $state(null);
+  async function checkAppUpdate() {
+    if (!inTauri) return;
+    try {
+      const { check } = await import('@tauri-apps/plugin-updater');
+      const u = await check();
+      if (u) { updHandle = u; updState = updateReduce(null, { type: 'found', version: u.version }); }
+    } catch (e) {}
+  }
+  async function installAppUpdate() {
+    if (!updHandle || updState?.phase === 'downloading' || updState?.phase === 'restarting') return;
+    try {
+      await updHandle.downloadAndInstall((ev) => {
+        if (ev.event === 'Started') updState = updateReduce(updState, { type: 'begin', total: ev.data?.contentLength || 0 });
+        else if (ev.event === 'Progress') updState = updateReduce(updState, { type: 'chunk', size: ev.data?.chunkLength || 0 });
+        else if (ev.event === 'Finished') updState = updateReduce(updState, { type: 'downloaded' });
+      });
+      updState = updateReduce(updState, { type: 'downloaded' });
+      // On Windows the NSIS installer takes over and exits us; elsewhere we relaunch ourselves.
+      const { relaunch } = await import('@tauri-apps/plugin-process');
+      await relaunch();
+    } catch (e) { updState = updateReduce(updState, { type: 'error', message: String(e) }); }
+  }
   async function notify(s, title, body) {
     if (inTauri) {
       // Native toasts via the notification plugin — the WebView's web Notification API is
@@ -394,6 +422,7 @@
     try { recentRoots = parseRecentRoots(localStorage.getItem(RECENT_ROOTS_KEY)); } catch (e) {}
     if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission();
     initialLoad();
+    checkAppUpdate();
     const onKey = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
@@ -423,7 +452,8 @@
             back={returnTo ? { label: returnTo.label || base(returnTo.cwd) } : null}
             onBack={() => { const t = returnTo; returnTo = null; selected = t; }}
             onHome={() => { returnTo = null; selected = null; }} onRunning={goRunning}
-            onPush={() => (pushOpen = true)} onPhone={() => (remoteOpen = true)} />
+            onPush={() => (pushOpen = true)} onPhone={() => (remoteOpen = true)}
+            update={updateLabel(updState)} updateError={updState?.error || ''} onUpdate={installAppUpdate} />
   <div class="app">
     <main class="main">
       {#if selected}

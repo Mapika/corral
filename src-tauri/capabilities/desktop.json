@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop-updater",
+  "description": "self-update: check, download + install, relaunch — desktop only (the plugins are not compiled for Android, so these permissions must not appear in the shared default capability)",
+  "windows": [
+    "main"
+  ],
+  "platforms": [
+    "macOS",
+    "windows",
+    "linux"
+  ],
+  "permissions": [
+    "updater:default",
+    "process:allow-restart"
+  ]
+}

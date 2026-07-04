@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Corral",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "identifier": "io.github.mapika.corral",
   "build": {
     "frontendDist": "../dist",
@@ -15,8 +15,20 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZDNTk1MTcxMzkwQ0EyOEUKUldTT29ndzVjVkZaL004djJsdkE3Y2hlMnNrd2cxZUppQ2JISmxBMEM0a2pQQkNod0s4UER4NmgK",
+      "endpoints": [
+        "https://github.com/Mapika/corral/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": [
       "nsis"
     ],

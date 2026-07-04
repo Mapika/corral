@@ -155,6 +155,10 @@ fn run_desktop() {
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| show_main(app)))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
+        // Self-update (minisign-verified packages from the latest.json release asset — no OS
+        // code-signing involved). The webview drives it: check on boot, install on click.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         // Shortcut registration happens in setup() below — registering at plugin init makes a
         // hotkey collision fatal to the whole app (another program owning the combo panicked us).
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
