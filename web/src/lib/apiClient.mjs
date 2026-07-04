@@ -145,6 +145,10 @@ export function createApiClient({ getBase = () => '', getToken = () => '' } = {}
     return json('/api/queue/add?' + q.toString(), { method: 'POST', retries: 0 });
   }
   async function queueRemove(id) { return json('/api/queue/remove?id=' + encodeURIComponent(id), { method: 'POST', retries: 0 }); }
+
+  // --- one computer, first steps (0.8): checkouts this ranch knows + wake a sleeping sibling ---
+  async function listProjects() { return json('/api/projects', { fallback: { checkouts: [] } }); }
+  async function wakeHost(mac) { return json('/api/wake?mac=' + encodeURIComponent(mac), { method: 'POST', retries: 0 }); }
   async function queueMove(id, to) { return json('/api/queue/move?id=' + encodeURIComponent(id) + '&to=' + encodeURIComponent(to), { method: 'POST', retries: 0 }); }
   async function queueHold(until) { return json('/api/queue/hold?until=' + encodeURIComponent(until), { method: 'POST', retries: 0 }); }
   async function queueRelease() { return json('/api/queue/release', { method: 'POST', retries: 0 }); }
@@ -199,6 +203,7 @@ export function createApiClient({ getBase = () => '', getToken = () => '' } = {}
     setSessionLabel, killSession, interruptSession, removeSession, resumeSession, respondPermission,
     lsDir, fileUrl, dirDownloadUrl, fileText, mkdir, renameItem, deleteItem, gitDiff, uploadFile,
     listQueue, queueAdd, queueRemove, queueMove, queueHold, queueRelease, queueKeep, queueBounce,
+    listProjects, wakeHost,
     chatSocket, eventsSocket, termSocket,
     getRemoteConfig, setRemoteConfig,
     getPushConfig, setPushConfig, testPush,

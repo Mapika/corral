@@ -5,11 +5,16 @@
   import { apiErrorMessage } from '../lib/apiRequest.mjs';
   import { LAUNCH_DEFAULTS_KEY, launchDefaultsFor, parseLaunchDefaults, rememberLaunchDefaults, serializeLaunchDefaults } from '../lib/launchDefaults.mjs';
   import { AGENTS, MODELS, PERMS } from '../lib/launchOptions.mjs';
+  import { groupProjects, placeChoices, placeLabel } from '../lib/projectPlaces.mjs';
   import { recentRootsForHost } from '../lib/recentRoots.mjs';
   import { showToast } from './nav.svelte.js';
   import Sheet from './Sheet.svelte';
 
   let { data, onclose, onLaunched, initialDir = '', initialBrief = '', initialRanch = '' } = $props();
+
+  // 0.8: fresh capacity + checkout data for placement, fetched when the sheet opens — the one
+  // moment the numbers matter.
+  $effect(() => { data.refreshPlacement?.(); });
 
   // Everywhere an agent can run: each ranch's own box, then that ranch's ssh hosts.
   let multi = $derived(data.d.ranches.length > 1);
@@ -42,6 +47,23 @@
   let roots = $derived(sel ? recentRootsForHost({ ranch: sel.ranch, host: sel.host, roots: data.d.recentRoots, sessions: data.d.sessions }) : []);
   let models = $derived(MODELS[agent] || MODELS.claude);
 
+  // One computer, first steps: when the picked dir is a checkout of a project that lives on 2+
+  // ranches, offer the ranked places — suggestion first, the rest one tap away.
+  const dirKey = (s) => String(s || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  let projects = $derived(groupProjects(data.d.ranches));
+  let curDir = $derived(dir.trim() || (sel?.host === 'local' ? sel.home : ''));
+  let curProject = $derived(sel?.host === 'local'
+    ? projects.find((p) => p.places.some((x) => x.ranch === sel.ranch && dirKey(x.dir) === dirKey(curDir))) || null
+    : null);
+  let places = $derived(placeChoices(curProject));
+  // The identity the launch defaults travel under (null for local-only repos).
+  const remoteFor = (ranchId, d) => projects.find((p) => p.remote && p.places.some((x) => x.ranch === ranchId && dirKey(x.dir) === dirKey(d)))?.remote || null;
+  function pickPlace(p) {
+    if (!p.live || (sel && sel.ranch === p.ranch && dirKey(curDir) === dirKey(p.dir))) return;
+    picked = { ranch: p.ranch, host: 'local' };
+    pickDir(p.dir);
+  }
+
   let defaults = {};
   try { defaults = parseLaunchDefaults(localStorage.getItem(LAUNCH_DEFAULTS_KEY)); } catch (e) {}
 
@@ -54,7 +76,7 @@
   }
   function pickDir(d) {
     dir = d;
-    const known = sel && launchDefaultsFor(defaults, sel.host, d, ranchScope(sel));
+    const known = sel && launchDefaultsFor(defaults, sel.host, d, ranchScope(sel), remoteFor(sel.ranch, d));
     if (!known) return;
     agent = known.agent; perm = known.perm; worktree = known.worktree;
     model = (MODELS[known.agent] || []).some((m) => m.v === known.model) ? known.model : null;
@@ -67,7 +89,7 @@
       const r = await data.clientFor(sel.ranch).launchSession({ host: sel.host, dir: target, agent, model: model || undefined, perm, worktree: worktree && sel.host === 'local', prompt: brief.trim() || undefined });
       if (r?.ok === false) throw new Error(r.error || 'launch failed');
       data.rememberRoot(sel.ranch, sel.host, target);
-      defaults = rememberLaunchDefaults(defaults, { ranch: ranchScope(sel), host: sel.host, dir: target, agent, perm, model, worktree: worktree && sel.host === 'local' });
+      defaults = rememberLaunchDefaults(defaults, { ranch: ranchScope(sel), host: sel.host, dir: target, project: remoteFor(sel.ranch, target), agent, perm, model, worktree: worktree && sel.host === 'local' });
       try { localStorage.setItem(LAUNCH_DEFAULTS_KEY, serializeLaunchDefaults(defaults)); } catch (e) {}
       await data.poll();
       const rn = data.d.ranches.find((x) => x.id === sel.ranch);
@@ -122,6 +144,13 @@
       </div>
     {/if}
     <input class="dirin" bind:value={dir} placeholder={sel?.host === 'local' ? sel.home : '~/project'} autocapitalize="off" autocorrect="off" spellcheck="false" />
+    {#if places}
+      <div class="chips places">
+        {#each places as p (p.ranch + ':' + p.dir)}
+          <button class="chip" class:on={sel && sel.ranch === p.ranch && dirKey(curDir) === dirKey(p.dir)} disabled={!p.live} onclick={() => pickPlace(p)}>{placeLabel(p)}</button>
+        {/each}
+      </div>
+    {/if}
 
     <h2>First instruction</h2>
     <textarea class="brief" bind:value={brief} rows="2"
@@ -171,6 +200,8 @@
   .chips { display: flex; flex-wrap: wrap; gap: 8px; }
   .chip { background: var(--chip); border: 0; border-radius: var(--pill); color: var(--text-dim); min-height: 40px; padding: 0 16px; font: var(--w-reg) 13px var(--sans); cursor: pointer; }
   .chip.on { background: var(--paper); color: var(--ink); font-weight: var(--w-med); }
+  .chip:disabled { opacity: .45; cursor: default; }
+  .places { margin-top: var(--s2); }
 
   .roots { display: flex; flex-direction: column; margin-bottom: var(--s2); }
   .root { display: flex; flex-direction: column; gap: 2px; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--seam); min-height: 52px; justify-content: center; padding: 8px 2px; cursor: pointer; }

@@ -35,6 +35,17 @@ import { launchDefaultsFor, parseLaunchDefaults, rememberLaunchDefaults, seriali
   assert.equal(launchDefaultsFor(map, 'local', '/app').agent, 'codex');        // unscoped lookup unaffected
 }
 
+// 0.8 identity keys: the combo follows the project to a checkout never launched from here,
+// but any dir-scoped memory (ranch-scoped or legacy) still beats the project-wide default
+{
+  let map = rememberLaunchDefaults({}, { ranch: 'r1', host: 'local', dir: 'E:/corral', project: 'github.com/mapika/corral', agent: 'codex', perm: 'acceptEdits', now: 1 });
+  assert.equal(launchDefaultsFor(map, 'local', '/home/m/corral', 'r2', 'github.com/mapika/corral').perm, 'acceptEdits');   // travels
+  assert.equal(launchDefaultsFor(map, 'local', '/home/m/corral', 'r2'), null);                                             // no identity, no match
+  assert.equal(launchDefaultsFor(map, 'local', '/home/m/corral', 'r2', 'github.com/other/repo'), null);
+  map = rememberLaunchDefaults(map, { ranch: 'r2', host: 'local', dir: '/home/m/corral', agent: 'claude', perm: 'plan', now: 2 });
+  assert.equal(launchDefaultsFor(map, 'local', '/home/m/corral', 'r2', 'github.com/mapika/corral').perm, 'plan');          // specific place wins
+}
+
 // hostile storage shapes
 assert.deepEqual(parseLaunchDefaults('not json'), {});
 assert.deepEqual(parseLaunchDefaults('[1,2]'), {});

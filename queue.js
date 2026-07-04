@@ -19,6 +19,7 @@ const path = require('path');
 
 const chat = require('./chat');
 const push = require('./push');
+const projects = require('./projects');
 
 const DATA_DIR = fs.existsSync(path.join(os.homedir(), '.codapp')) && !fs.existsSync(path.join(os.homedir(), '.corral'))
   ? path.join(os.homedir(), '.codapp')
@@ -287,6 +288,7 @@ function add({ dir, prompt, agent = 'claude', model = null, perm = 'auto' } = {}
   if (!chat.AGENTS.has(agent)) throw new Error('unknown agent: ' + agent);
   if (!chat.PERM_MODES.has(perm)) perm = 'auto';
   if (model != null && model !== '' && !chat.SAFE_ARG.test(model)) throw new Error('invalid model: ' + model);
+  projects.record(dir);   // queueing against a repo teaches this ranch the checkout (0.8 placement)
   const job = { id: crypto.randomUUID(), dir, prompt: String(prompt), label: jobLabel(prompt),
     agent, model: model || null, perm, status: 'queued', createdAt: Date.now() };
   jobs.push(job);

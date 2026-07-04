@@ -288,7 +288,15 @@ function addTunnel(url) {
 
 async function handleApi(req, res, url) {
   if (!url.pathname.startsWith('/api/')) return false;
-  if (url.pathname === '/api/hosts') return json(res, { local: 'E:/Projects/terminal-rancher', hosts: ['gpu-box', 'staging', 'build-node'], hostname: 'demo-ranch' }), true;
+  if (url.pathname === '/api/hosts') return json(res, { local: 'E:/Projects/terminal-rancher', hosts: ['gpu-box', 'staging', 'build-node'], hostname: 'demo-ranch',
+    telemetry: { cpus: 16, load1: 0.4, memFree: 21_000_000_000, memTotal: 32_000_000_000, uptime: 86_400, onBattery: false, busy: 2, platform: 'linux', macs: ['aa:bb:cc:dd:ee:ff'] } }), true;
+  // Both demo ranches report a checkout of the same remote, so the two-ranch pass sees one
+  // project with two places (the placement chip's whole reason to exist).
+  if (url.pathname === '/api/projects') return json(res, { checkouts: [
+    { dir: 'E:/Projects/terminal-rancher', root: 'E:/Projects/terminal-rancher', remote: 'github.com/mapika/corral', name: 'corral', lastSeen: now() - 3600_000 },
+    { dir: '/srv/market-feed', root: '/srv/market-feed', remote: 'github.com/mapika/market-feed', name: 'market-feed', lastSeen: now() - 7200_000 },
+  ] }), true;
+  if (url.pathname === '/api/wake' && req.method === 'POST') return json(res, { ok: true }), true;
   if (url.pathname === '/api/servers') return json(res, hostStatuses()), true;
   if (url.pathname === '/api/chat/list') return json(res, sessions()), true;
   if (url.pathname === '/api/chat/launch' && req.method === 'POST') return json(res, { ok: true, id: 'sess-corral' }), true;

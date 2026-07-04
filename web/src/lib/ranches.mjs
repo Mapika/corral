@@ -14,7 +14,8 @@ export function parseRanches(raw) {
     const list = Array.isArray(v) ? v : Array.isArray(v?.ranches) ? v.ranches : [];
     return list
       .filter((r) => r && typeof r === 'object' && r.base && r.token && r.id)
-      .map((r) => ({ id: String(r.id), name: String(r.name || r.base), base: String(r.base), token: String(r.token), addedAt: Number(r.addedAt) || 0 }));
+      // macs: the ranch's self-reported MACs (0.8) — kept so wake-on-LAN works while it's OFFLINE
+      .map((r) => ({ id: String(r.id), name: String(r.name || r.base), base: String(r.base), token: String(r.token), addedAt: Number(r.addedAt) || 0, macs: Array.isArray(r.macs) ? r.macs.map(String) : [] }));
   } catch (e) {
     return [];
   }
@@ -54,7 +55,7 @@ export function upsertRanch(list, { base, token, name, now = 0, id, taken = [] }
     return { list: list.map((r) => (r === existing ? ranch : r)), ranch, refreshed: true };
   }
   const withTaken = [...list, ...taken.map((n) => ({ id: '\0taken', name: String(n) }))];
-  const ranch = { id: id || genId(), name: uniqueName(withTaken, name || defaultRanchName(base)), base, token, addedAt: now };
+  const ranch = { id: id || genId(), name: uniqueName(withTaken, name || defaultRanchName(base)), base, token, addedAt: now, macs: [] };
   return { list: [...list, ranch], ranch, refreshed: false };
 }
 

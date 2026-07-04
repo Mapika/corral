@@ -28,7 +28,7 @@ export function createMobileData({ standalone = false } = {}) {
   const conns = new Map();   // ranch id -> { client, ws, retry, retryTimer, sessions }
   let pollTimer = null, stopped = false;
 
-  const runtime = { live: false, offline: false, loaded: false, error: '', localHome: '~', hosts: [], queueHold: null };
+  const runtime = { live: false, offline: false, loaded: false, error: '', localHome: '~', hosts: [], queueHold: null, telemetry: null, checkouts: [] };
 
   function recompute() {
     d.sessions = mergeSessions(d.ranches, Object.fromEntries([...conns].map(([id, c]) => [id, c.sessions])));
@@ -75,7 +75,34 @@ export function createMobileData({ standalone = false } = {}) {
       r.localHome = h.local || '~';
       // The serving origin never told us its name at pair time — adopt the server's hostname.
       if (r.kind === 'origin' && h.hostname) r.name = h.hostname;
+      // 0.8: capacity signals for placement, and the ranch's MACs remembered onto the persisted
+      // roster — waking it only ever matters once it can no longer tell us its address.
+      r.telemetry = h.telemetry || null;
+      if (r.kind === 'paired' && h.telemetry?.macs?.length) { r.macs = h.telemetry.macs; persist(); }
     } catch (e) {}
+  }
+
+  // Placement freshness matters at launch time only — the launch sheet calls this on open
+  // instead of every events frame carrying telemetry nobody is looking at.
+  async function refreshPlacement() {
+    await Promise.allSettled(d.ranches.map(async (r) => {
+      const c = conns.get(r.id);
+      if (!c || r.offline) return;
+      await loadHostsConn(r, c);
+      try { r.checkouts = (await c.client.listProjects()).checkouts || []; } catch (e) {}
+    }));
+    recompute();
+  }
+
+  // Wake a sleeping ranch: every live sibling broadcasts the magic packet for every MAC we
+  // remembered (duplicates are harmless; only one of them has to be on the right LAN).
+  async function wakeRanch(id) {
+    const target = ranchFor(id);
+    const macs = target?.macs || [];
+    const senders = d.ranches.filter((r) => r.id !== id && !r.offline && conns.get(r.id));
+    if (!macs.length || !senders.length) return { ok: false, error: !macs.length ? 'no MAC remembered for this ranch yet' : 'no live ranch to send the packet' };
+    const sent = await Promise.allSettled(senders.flatMap((r) => macs.map((mac) => clientFor(r.id).wakeHost(mac))));
+    return sent.some((x) => x.status === 'fulfilled' && x.value?.ok) ? { ok: true } : { ok: false, error: 'no ranch could send the packet' };
   }
 
   function connectEvents(r, c) {
@@ -115,7 +142,7 @@ export function createMobileData({ standalone = false } = {}) {
   }
 
   // --- roster mutations (persisted for paired ranches only) ------------------------------------
-  const persisted = () => d.ranches.filter((r) => r.kind === 'paired').map(({ id, name, base, token, addedAt }) => ({ id, name, base, token, addedAt }));
+  const persisted = () => d.ranches.filter((r) => r.kind === 'paired').map(({ id, name, base, token, addedAt, macs }) => ({ id, name, base, token, addedAt, macs: macs || [] }));
   const persist = () => { try { localStorage.setItem(RANCHES_KEY, serializeRanches(persisted())); } catch (e) {} };
 
   // Returns { ranch, refreshed } — refreshed means the base was already paired and only the
@@ -215,5 +242,5 @@ export function createMobileData({ standalone = false } = {}) {
     try { localStorage.setItem(RECENT_ROOTS_KEY, serializeRecentRoots(d.recentRoots)); } catch (e) {}
   }
 
-  return { d, start, stop, poll, loadHosts, rememberRoot, clientFor, addRanch, attachPocket, removeRanchById, renameRanchById };
+  return { d, start, stop, poll, loadHosts, rememberRoot, clientFor, addRanch, attachPocket, removeRanchById, renameRanchById, refreshPlacement, wakeRanch };
 }

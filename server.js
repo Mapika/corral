@@ -20,6 +20,8 @@ const pushCfg = require('./push');
 const webpush = require('./webpush');
 const remoteCfg = require('./remote');
 const queue = require('./queue');
+const projects = require('./projects');
+const wake = require('./wake');
 const demo = process.env.CORRAL_DEMO === '1' ? require('./demo') : null;
 
 const SELFTEST = process.argv[2] === 'selftest';
@@ -135,6 +137,44 @@ function loadHosts() {
 }
 let hosts = loadHosts();
 const known = () => new Set(hosts);
+
+// --- host telemetry (0.8): capacity signals for console-side placement ---
+// Everything decision-shaped is a pure parser (selftested); the platform readers are
+// best-effort and cached — a ranch that can't read its battery just reports null.
+const busyCount = list => (Array.isArray(list) ? list : []).filter(s => s && s.status === 'busy').length;
+const load1For = (platform, la) => (platform === 'win32' ? null : (Array.isArray(la) && Number.isFinite(la[0]) ? la[0] : null));   // os.loadavg is hardwired zeros on Windows
+const parseBatteryWin = text => { const m = /\d+/.exec(String(text || '')); return m ? +m[0] === 1 : null; };                      // Win32_Battery.BatteryStatus: 1 = discharging; absent = no battery
+const parseBatteryPmset = text => (/Battery Power/i.test(String(text || '')) ? true : /AC Power/i.test(String(text || '')) ? false : null);
+const parseBatteryLinux = statuses => { const s = (statuses || []).map(x => String(x).trim()); return s.some(x => x === 'Discharging') ? true : s.length ? false : null; };
+const macsOf = ifaces => [...new Set(Object.values(ifaces || {}).flat().filter(a => a && !a.internal && a.mac && a.mac !== '00:00:00:00:00:00').map(a => a.mac))];
+
+// onBattery is refreshed in the background (the Windows reader shells out to powershell — too
+// slow to sit on the /api/hosts path); consumers read the cache, null until the first read.
+let battery = { val: null, at: 0, busy: false };
+async function refreshBattery() {
+  if (battery.busy || Date.now() - battery.at < 30_000) return;
+  battery.busy = true;
+  try {
+    if (process.platform === 'win32') {
+      const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '(Get-CimInstance Win32_Battery).BatteryStatus'], { windowsHide: true, timeout: 10_000 });
+      battery.val = parseBatteryWin(stdout);
+    } else if (process.platform === 'darwin') {
+      const { stdout } = await execFileAsync('pmset', ['-g', 'batt'], { timeout: 10_000 });
+      battery.val = parseBatteryPmset(stdout);
+    } else {
+      const base = '/sys/class/power_supply';
+      const statuses = fs.readdirSync(base).map(d => { try { return fs.readFileSync(path.join(base, d, 'status'), 'utf8'); } catch (e) { return null; } }).filter(Boolean);
+      battery.val = parseBatteryLinux(statuses);
+    }
+  } catch (e) { battery.val = null; }
+  battery.at = Date.now();
+  battery.busy = false;
+}
+function telemetrySnapshot() {
+  refreshBattery().catch(() => {});
+  return { cpus: os.cpus().length, load1: load1For(process.platform, os.loadavg()), memFree: os.freemem(), memTotal: os.totalmem(),
+    uptime: os.uptime(), onBattery: battery.val, busy: busyCount(chat.list()), platform: process.platform, macs: macsOf(os.networkInterfaces()) };
+}
 function jsonError(res, status, error) {
   res.statusCode = status;
   res.setHeader('content-type', 'application/json');
@@ -365,6 +405,39 @@ if (SELFTEST) {
   a.equal(reqToken({ headers: {} }, new URL('http://x/api/a?tk=q')), 'q');
   a.equal(reqToken({ headers: { 'x-corral-token': 'h', authorization: 'Bearer b' } }, new URL('http://x/api/a?tk=q')), 'h');
   a.equal(reqToken({ headers: {} }, new URL('http://x/api/a')), '');
+  // one computer, first steps (0.8): identity normalization, magic packets, telemetry parsers
+  a.equal(projects.normalizeRemote('git@github.com:Mapika/Corral.git'), 'github.com/mapika/corral');
+  a.equal(projects.normalizeRemote('https://user:tok@github.com/mapika/corral.git'), 'github.com/mapika/corral');
+  a.equal(projects.normalizeRemote('ssh://git@gitea.lan:2222/a/b.git'), 'gitea.lan/a/b');
+  a.equal(projects.normalizeRemote('https://github.com/mapika/corral/'), 'github.com/mapika/corral');
+  a.equal(projects.normalizeRemote('git@github.com:Mapika/Corral.git'), projects.normalizeRemote('HTTPS://GitHub.com/mapika/corral'));   // ssh and https converge
+  a.equal(projects.normalizeRemote('C:/Users/m/repo'), null);        // Windows drive is not a remote
+  a.equal(projects.normalizeRemote('C:\\Users\\m\\repo'), null);
+  a.equal(projects.normalizeRemote('/srv/git/repo.git'), null);      // filesystem remote has no global identity
+  a.equal(projects.normalizeRemote(''), null);
+  a.equal(projects.normalizeRemote('not a url at all'), null);
+  const pkt = wake.buildMagicPacket('aa:bb:cc:dd:ee:ff');
+  a.equal(pkt.length, 102);
+  a.deepEqual([...pkt.slice(0, 6)], [255, 255, 255, 255, 255, 255]);
+  a.deepEqual([...pkt.slice(6, 12)], [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]);
+  a.deepEqual([...pkt.slice(96)], [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]);            // 16th repetition ends the packet
+  a.equal(wake.buildMagicPacket('AA-BB-CC-DD-EE-FF').equals(pkt), true);            // dash form (Windows) is the same packet
+  a.throws(() => wake.buildMagicPacket('aa:bb:cc:dd:ee'), /bad mac/);
+  a.throws(() => wake.buildMagicPacket('zz:bb:cc:dd:ee:ff'), /bad mac/);
+  a.throws(() => wake.buildMagicPacket(''), /bad mac/);
+  a.equal(busyCount([{ status: 'busy' }, { status: 'idle' }, { status: 'busy' }, null]), 2);
+  a.equal(busyCount([]), 0);
+  a.equal(load1For('win32', [3, 2, 1]), null);                        // Windows loadavg is fiction — never report it
+  a.equal(load1For('linux', [0.5, 0.4, 0.3]), 0.5);
+  a.equal(load1For('linux', undefined), null);
+  a.equal(parseBatteryWin('1'), true); a.equal(parseBatteryWin('2\r\n'), false); a.equal(parseBatteryWin(''), null);
+  a.equal(parseBatteryPmset("Now drawing from 'Battery Power'"), true);
+  a.equal(parseBatteryPmset("Now drawing from 'AC Power'"), false);
+  a.equal(parseBatteryPmset(''), null);
+  a.equal(parseBatteryLinux(['Discharging\n']), true);
+  a.equal(parseBatteryLinux(['Full\n', 'Charging\n']), false);
+  a.equal(parseBatteryLinux([]), null);
+  a.deepEqual(macsOf({ eth0: [{ mac: 'aa:bb:cc:dd:ee:ff', internal: false }], lo: [{ mac: '00:00:00:00:00:00', internal: true }] }), ['aa:bb:cc:dd:ee:ff']);
   // pocket CONNECT proxy: 443-only, never a relay to loopback/private targets
   const { parseConnectTarget } = require('./connectproxy');
   a.deepEqual(parseConnectTarget('api.anthropic.com:443'), { host: 'api.anthropic.com', port: 443 });
@@ -1132,6 +1205,7 @@ const handleRequest = async (req, res) => {
     if (host === 'local') {
       let cwd = dir || os.homedir();
       if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) { res.statusCode = 400; return res.end(JSON.stringify({ ok: false, error: 'bad dir' })); }
+      projects.record(cwd);   // learn the checkout before any worktree is made (identity = the operator's repo)
       if (worktree) {
         // verify dir is inside a repo, then check the branch/worktree out NEXT TO the repo; the
         // session launches in the worktree so the operator's own tree stays untouched.
@@ -1157,7 +1231,18 @@ const handleRequest = async (req, res) => {
     hosts = loadHosts();
     res.setHeader('content-type', 'application/json');
     // hostname: what this box calls itself — the phone uses it as the default ranch name.
-    return res.end(JSON.stringify({ local: os.homedir().replace(/\\/g, '/'), hosts, hostname: os.hostname() }));
+    // telemetry: capacity signals + this box's MACs, so the console can place work and wake us.
+    return res.end(JSON.stringify({ local: os.homedir().replace(/\\/g, '/'), hosts, hostname: os.hostname(), telemetry: telemetrySnapshot() }));
+  }
+  // --- one computer, first steps (0.8): checkouts this ranch knows + wake-a-sibling ---
+  if (url.pathname === '/api/projects') {
+    res.setHeader('content-type', 'application/json');
+    return res.end(JSON.stringify({ checkouts: projects.list() }));
+  }
+  if (url.pathname === '/api/wake' && req.method === 'POST') {
+    res.setHeader('content-type', 'application/json');
+    try { await wake.send({ mac: url.searchParams.get('mac') || '' }); return res.end(JSON.stringify({ ok: true })); }
+    catch (e) { res.statusCode = 400; return res.end(JSON.stringify({ ok: false, error: String(e.message || e) })); }
   }
   if (url.pathname === '/api/chat/list') {
     res.setHeader('content-type', 'application/json');

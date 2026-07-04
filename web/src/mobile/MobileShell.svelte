@@ -252,6 +252,16 @@
     if (next && next !== r.name) data.renameRanchById(r.id, next);
   }
 
+  // Wake-on-LAN (0.8): any live sibling broadcasts the magic packet for the sleeper's
+  // remembered MACs. Machines take a beat to boot — say so instead of pretending it's instant.
+  let wakingRanch = $state(null);
+  async function wakeRanchRow(r) {
+    wakingRanch = r.id;
+    const res = await data.wakeRanch(r.id);
+    wakingRanch = null;
+    showToast(res.ok ? 'Magic packet sent — give it ~30 seconds.' : 'Could not wake: ' + res.error);
+  }
+
   function unpairRanch(r) {
     if (r.kind === 'pocket') {
       clearPocket();
@@ -484,6 +494,9 @@
                   <span class="rname">{r.name}</span>
                   <code class="rbase">{r.kind === 'pocket' ? 'this phone' : r.kind === 'origin' ? 'this device' : r.base.replace(/^https?:\/\//, '')}</code>
                 </button>
+                {#if r.offline && (r.macs || []).length && data.d.ranches.some((x) => x.id !== r.id && !x.offline)}
+                  <button class="rkill" onclick={() => wakeRanchRow(r)} disabled={wakingRanch === r.id}>{wakingRanch === r.id ? 'waking…' : 'wake'}</button>
+                {/if}
                 {#if r.kind !== 'origin'}
                   <button class="rkill" onclick={() => unpairRanch(r)}>{r.kind === 'pocket' ? 'stop' : 'unpair'}</button>
                 {/if}
