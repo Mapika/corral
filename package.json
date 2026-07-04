@@ -1,10 +1,11 @@
 {
   "name": "corral",
   "private": true,
-  "version": "0.8.0",
+  "version": "0.8.1",
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
+    "tui": "node tui.mjs",
     "dev": "vite",
     "test": "node scripts/run-tests.mjs",
     "build": "vite build",
