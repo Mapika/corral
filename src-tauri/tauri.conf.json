@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Corral",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "identifier": "io.github.mapika.corral",
   "build": {
     "frontendDist": "../dist",
@@ -31,6 +31,7 @@
       "../push.js": "push.js",
       "../webpush.js": "webpush.js",
       "../remote.js": "remote.js",
+      "../queue.js": "queue.js",
       "../connectproxy.js": "connectproxy.js",
       "../demo.js": "demo.js",
       "../dist": "dist",

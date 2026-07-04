@@ -25,7 +25,7 @@ const DEFAULTS = Object.freeze({
   // Click opens the installed Corral app (corral:// scheme) instead of the browser console.
   // Opt-in: without the APK a corral:// link is a dead tap.
   appClick: false,
-  events: Object.freeze({ input: true, done: true, fail: true }),
+  events: Object.freeze({ input: true, done: true, fail: true, landed: true }),
 });
 
 function load() {
@@ -78,6 +78,13 @@ const AGENT_NAMES = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode' };
 const basename = (p) => String(p || '').split(/[\\/]/).filter(Boolean).pop() || '~';
 const where = (s = {}) => basename(s.cwd) + (s.host && s.host !== 'local' ? ' / ' + s.host : '');
 const agentName = (s = {}) => AGENT_NAMES[s.agent] || AGENT_NAMES.claude;
+// A queue landing's one-line diff summary: "+120 -30 across 4 files (2 new)". ASCII only —
+// ntfy titles are latin-1 and bodies should survive any relay unmangled.
+function diffstatText(d = {}) {
+  const files = (d.files || 0) + (d.untracked || 0);
+  const parts = ['+' + (d.add || 0), '-' + (d.del || 0), 'across ' + files + (files === 1 ? ' file' : ' files')];
+  return parts.join(' ') + (d.untracked ? ' (' + d.untracked + ' new)' : '');
+}
 
 function messageFor(kind, s = {}, extra = {}) {
   if (kind === 'input') {
@@ -94,6 +101,13 @@ function messageFor(kind, s = {}, extra = {}) {
       tags: 'white_check_mark', priority: 'default',
     };
   }
+  if (kind === 'landed') {
+    return {
+      title: agentName(s) + ' landed a diff',
+      body: where(s) + ' - ' + diffstatText(extra.diffstat) + ' - review when ready',
+      tags: 'package', priority: 'default',
+    };
+  }
   return {
     title: 'Session ' + (kind === 'fail-error' ? 'error' : 'ended'),
     body: where(s) + (extra.detail ? ' - ' + String(extra.detail).slice(0, 160) : ''),
@@ -105,12 +119,14 @@ function messageFor(kind, s = {}, extra = {}) {
 // console on the session; permission asks optionally carry one-tap Allow/Deny http actions that
 // POST straight back to the LAN listener. Both are dropped when remote access is off — a click
 // URL nobody can reach is worse than none.
-function notificationExtras({ kind, sessionId, requestId, base, token, actionsEnabled, appClick } = {}) {
+function notificationExtras({ kind, sessionId, requestId, reviewId, base, token, actionsEnabled, appClick } = {}) {
   if (!base || !sessionId) return {};
+  // a queue landing taps straight into the review screen, not the transcript
+  const target = kind === 'landed' && reviewId ? ['review', reviewId] : ['session', sessionId];
   const out = {
     click: appClick
-      ? 'corral://session/' + encodeURIComponent(sessionId)          // opens the installed APK
-      : base + '/#session=' + encodeURIComponent(sessionId),
+      ? 'corral://' + target[0] + '/' + encodeURIComponent(target[1])          // opens the installed APK
+      : base + '/#' + target[0] + '=' + encodeURIComponent(target[1]),
   };
   if (kind === 'input' && actionsEnabled && token && requestId) {
     const act = (d) => base + '/api/chat/permission?id=' + encodeURIComponent(sessionId) + '&requestId=' + encodeURIComponent(requestId) + '&decision=' + d;
@@ -166,10 +182,33 @@ function notifySession(kind, s, extra = {}) {
   const msg = messageFor(kind, s, extra);
   if (cfg.enabled && cfg.topic) {
     const { base, token } = remoteBase();
-    const extras = notificationExtras({ kind, sessionId: s && s.id, requestId: extra.requestId, base, token, actionsEnabled: cfg.actions, appClick: cfg.appClick });
+    const extras = notificationExtras({ kind, sessionId: s && s.id, requestId: extra.requestId, reviewId: extra.jobId, base, token, actionsEnabled: cfg.actions, appClick: cfg.appClick });
     send({ ...msg, ...extras }, cfg).catch((e) => console.error('push failed:', e.message));
   }
-  webpush.notify({ title: msg.title, body: msg.body, priority: msg.priority, sessionId: s && s.id }).catch((e) => console.error('webpush failed:', e.message));
+  webpush.notify({ title: msg.title, body: msg.body, priority: msg.priority, sessionId: s && s.id, reviewId: kind === 'landed' ? extra.jobId : undefined }).catch((e) => console.error('webpush failed:', e.message));
 }
 
-module.exports = { get, set, send, messageFor, notificationExtras, notifySession };
+// End-of-drain summary (pure text — selftested): one buzz for a multi-job night. Rides the same
+// `landed` toggle and both transports; clicks land on the phone console's herd (review pile on top).
+function queueSummaryText({ landed = 0, failed = 0, empty = 0 } = {}) {
+  const parts = [];
+  if (landed) parts.push(landed + ' landed');
+  if (failed) parts.push(failed + ' failed');
+  if (empty) parts.push(empty + ' came back empty');
+  return parts.join(' - ') || 'nothing ran';
+}
+function notifyQueue(counts) {
+  const cfg = get();
+  if (cfg.events.landed === false) return;
+  const now = Date.now();
+  if (now - (lastSent.get('queue:summary') || 0) < COOLDOWN_MS) return;
+  lastSent.set('queue:summary', now);
+  const msg = { title: 'The herd is done', body: queueSummaryText(counts), tags: 'checkered_flag', priority: 'default' };
+  if (cfg.enabled && cfg.topic) {
+    const { base } = remoteBase();
+    send({ ...msg, ...(base ? { click: base + '/#queue' } : {}) }, cfg).catch((e) => console.error('push failed:', e.message));
+  }
+  webpush.notify({ title: msg.title, body: msg.body, priority: msg.priority }).catch((e) => console.error('webpush failed:', e.message));
+}
+
+module.exports = { get, set, send, messageFor, notificationExtras, notifySession, notifyQueue, queueSummaryText, diffstatText };

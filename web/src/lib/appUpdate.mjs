@@ -25,8 +25,14 @@ export function releaseUpdate(release, current) {
 // A push notification's corral://session/<id> deep link -> the session id, or null for anything
 // else (unknown host, malformed, non-corral scheme).
 export function sessionFromDeepLink(url) {
-  const text = String(url || '').trim();
-  const m = text.match(/^corral:\/\/session\/([^/?#]+)/i);
+  const t = deepLinkTarget(url);
+  return t && t.kind === 'session' ? t.id : null;
+}
+
+// Full deep-link parse: corral://session/<id> (transcript) or corral://review/<jobId> (a queue
+// landing's review screen) -> { kind, id }, null for anything else.
+export function deepLinkTarget(url) {
+  const m = String(url || '').trim().match(/^corral:\/\/(session|review)\/([^/?#]+)/i);
   if (!m) return null;
-  try { return decodeURIComponent(m[1]); } catch (e) { return null; }
+  try { return { kind: m[1].toLowerCase(), id: decodeURIComponent(m[2]) }; } catch (e) { return null; }
 }

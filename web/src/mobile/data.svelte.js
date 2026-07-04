@@ -9,12 +9,14 @@ import { apiErrorMessage } from '../lib/apiRequest.mjs';
 import { getPocketBase, getPocketToken, pocketEnabled } from '../lib/pocket.js';
 import { mergeSessions, parseRanches, RANCHES_KEY, renameRanch, serializeRanches, upsertRanch } from '../lib/ranches.mjs';
 import { parseRecentRoots, RECENT_ROOTS_KEY, rememberLaunchRoot, serializeRecentRoots } from '../lib/recentRoots.mjs';
+import { mergeQueues } from '../lib/reviewQueue.mjs';
 
 export function createMobileData({ standalone = false } = {}) {
   const d = $state({
     // [{ id, name, base, kind: 'origin'|'pocket'|'paired', live, offline, loaded, error, localHome, hosts }]
     ranches: [],
     sessions: [],       // merged + ranch-tagged, roster order
+    queue: [],          // merged + ranch-tagged overnight-ranch jobs
     recentRoots: [],
     loaded: false,      // some ranch has answered — screens can trust "empty"
     live: false,        // every ranch is on its events socket — polls stand down
@@ -26,10 +28,11 @@ export function createMobileData({ standalone = false } = {}) {
   const conns = new Map();   // ranch id -> { client, ws, retry, retryTimer, sessions }
   let pollTimer = null, stopped = false;
 
-  const runtime = { live: false, offline: false, loaded: false, error: '', localHome: '~', hosts: [] };
+  const runtime = { live: false, offline: false, loaded: false, error: '', localHome: '~', hosts: [], queueHold: null };
 
   function recompute() {
     d.sessions = mergeSessions(d.ranches, Object.fromEntries([...conns].map(([id, c]) => [id, c.sessions])));
+    d.queue = mergeQueues(d.ranches, Object.fromEntries([...conns].map(([id, c]) => [id, c.queue])));
     const rs = d.ranches;
     d.loaded = rs.length === 0 || rs.some((r) => r.loaded);
     d.live = rs.length > 0 && rs.every((r) => r.live);
@@ -57,6 +60,8 @@ export function createMobileData({ standalone = false } = {}) {
     try {
       c.sessions = await c.client.listSessions();
       r.loaded = true; r.offline = false; r.error = '';
+      // best-effort: a pre-0.7 server has no queue endpoint — the fallback keeps it empty
+      try { c.queue = await c.client.listQueue(); r.queueHold = c.queue.hold || null; } catch (e) {}
     } catch (e) {
       r.offline = true; r.error = apiErrorMessage(e, 'Could not reach ' + (r.kind === 'paired' ? r.name : 'the corral server') + '.');
     }
@@ -81,6 +86,7 @@ export function createMobileData({ standalone = false } = {}) {
       r.live = true; r.offline = false; r.error = '';
       c.retry = 0;
       if (msg.type === 'sessions') { c.sessions = msg.sessions; r.loaded = true; }
+      if (msg.type === 'queue') { c.queue = msg.queue; r.queueHold = msg.queue.hold || null; }
       recompute();
     };
     ws.onclose = () => {
@@ -93,7 +99,7 @@ export function createMobileData({ standalone = false } = {}) {
   }
 
   function startConn(r) {
-    const c = { client: makeClient(r), ws: null, retry: 0, retryTimer: null, sessions: [], gone: false };
+    const c = { client: makeClient(r), ws: null, retry: 0, retryTimer: null, sessions: [], queue: { hold: null, jobs: [] }, gone: false };
     conns.set(r.id, c);
     pollConn(r, c); loadHostsConn(r, c);
     connectEvents(r, c);

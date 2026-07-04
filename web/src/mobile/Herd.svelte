@@ -4,16 +4,20 @@
   import { showToast } from './nav.svelte.js';
   import { lastActiveLabel } from '../lib/operatorStatus.mjs';
   import { sessionKey } from '../lib/ranches.mjs';
+  import { diffstatLabel, jobProject, jobStatusView, pendingJobs, reviewJobs } from '../lib/reviewQueue.mjs';
   import { agentLabel, sessionHostLabel, sessionPathParts, sessionStatusView } from '../lib/sessionView.mjs';
   import Shader from '../lib/Shader.svelte';
 
   const buzz = (ms = 12) => { try { navigator.vibrate?.(ms); } catch (e) {} };
 
-  let { data, onOpenSession, onLaunch } = $props();
+  let { data, onOpenSession, onLaunch, onOpenReview, onOpenQueue } = $props();
 
   let sessions = $derived(data.d.sessions);
   let multi = $derived(data.d.ranches.length > 1);
   const where = (s) => (multi && s.ranchName ? s.ranchName + ' · ' : '') + sessionHostLabel(s.host);
+  // The overnight ranch: landings owed a decision, and how much is still cooking tonight.
+  let review = $derived(reviewJobs(data.d.queue));
+  let queuePending = $derived(pendingJobs(data.d.queue));
   let waiting = $derived(sessions.filter((s) => s.pendingPerm));
   let attention = $derived(sessions.filter((s) => !s.pendingPerm && (s.status === 'error' || s.status === 'exited')));
   let active = $derived(sessions.filter((s) => !s.pendingPerm && (s.status === 'busy' || s.status === 'starting')));
@@ -56,6 +60,22 @@
     catch (e) { showToast('Could not dismiss — it stays in the herd.'); await data.poll(); }
     finally { delete acting[k]; }
   }
+
+  // Quick keep straight from the card; bounce always routes through the review screen (it
+  // deletes the branch — the diff deserves at least one look).
+  async function quickKeep(j) {
+    if (acting[j.id]) return;
+    buzz();
+    acting[j.id] = true;
+    try {
+      const r = await data.clientFor(j.ranch).queueKeep(j.id);
+      if (r?.ok) showToast('Kept — merged into ' + jobProject(j) + '.');
+      else if (r?.conflict) showToast('Merge refused — the branch is waiting for your desktop.');
+      else showToast(r?.error || 'Keep failed.');
+      await data.poll();
+    } catch (e) { showToast('Keep failed — try again.'); }
+    finally { delete acting[j.id]; }
+  }
 </script>
 
 <div class="herd">
@@ -73,6 +93,12 @@
       <b class:warn={attention.length > 0}>{attention.length}</b>
       <span>attention</span>
     </div>
+    {#if review.length || queuePending.length}
+      <div class="stat">
+        <b class:alive={review.length > 0}>{review.length}</b>
+        <span>landed</span>
+      </div>
+    {/if}
   </div>
 
   {#if sessions.length === 0}
@@ -85,6 +111,34 @@
     {:else}
       <div class="empty"><span class="conn">connecting…</span></div>
     {/if}
+  {/if}
+
+  {#if review.length || queuePending.length}
+    <section>
+      <h2 class="qhead">Fresh diffs
+        <button class="qlink" onclick={() => onOpenQueue?.()}>{queuePending.length ? queuePending.length + ' queued' : 'queue'}</button>
+      </h2>
+      {#each review as j (j.ranch + ':' + j.id)}
+        <div class="card">
+          <button class="cbody" onclick={() => onOpenReview?.(j)}>
+            <span class="dot {jobStatusView(j.status).tone}"></span>
+            <span class="cmain">
+              <b>{j.label || jobProject(j)}</b>
+              <span class="csub">{jobProject(j)} · {jobStatusView(j.status).label}{#if j.diffstat}{' · '}<code>{diffstatLabel(j.diffstat)}</code>{/if}</span>
+              {#if j.error}<span class="csub"><code>{j.error}</code></span>{/if}
+            </span>
+            {#if multi && j.ranchName}<span class="chost">{j.ranchName}</span>{/if}
+          </button>
+          <div class="cactions">
+            <button class="deny" onclick={() => onOpenReview?.(j)} disabled={!!acting[j.id]}>Review</button>
+            <span class="sp"></span>
+            {#if j.status === 'landed'}
+              <button class="allow" onclick={() => quickKeep(j)} disabled={!!acting[j.id]}>Keep</button>
+            {/if}
+          </div>
+        </div>
+      {/each}
+    </section>
   {/if}
 
   {#if waiting.length || attention.length}
@@ -183,6 +237,8 @@
 
   section { padding-top: var(--s5); }
   h2 { margin: 0 0 var(--s2); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; font-weight: var(--w-reg); color: var(--text-faint); }
+  .qhead { display: flex; align-items: baseline; justify-content: space-between; }
+  .qlink { background: none; border: 0; padding: 0; color: var(--text-dim); font: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 
   .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); }
   .dot.busy { background: var(--mercury); animation: breathe 1.8s ease-in-out infinite; }

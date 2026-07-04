@@ -16,6 +16,7 @@ export const {
   listSessions, listHosts, listServerStatus, launchSession, searchHistory,
   setSessionLabel, killSession, interruptSession, removeSession, resumeSession, respondPermission,
   lsDir, fileUrl, dirDownloadUrl, fileText, mkdir, renameItem, deleteItem, gitDiff, uploadFile,
+  listQueue, queueAdd, queueRemove, queueMove, queueHold, queueRelease, queueKeep, queueBounce,
   chatSocket, eventsSocket, termSocket,
   getRemoteConfig, setRemoteConfig,
   getPushConfig, setPushConfig, testPush,

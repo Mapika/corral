@@ -15,7 +15,7 @@
   import Toasts from './lib/Toasts.svelte';
   import Titlebar from './lib/Titlebar.svelte';
   import { toast } from './lib/toast.svelte.js';
-  import { eventsSocket, listSessions, listHosts, listServerStatus, listTunnels, launchSession, resumeSession, killSession, removeSession } from './lib/api.js';
+  import { eventsSocket, listSessions, listHosts, listServerStatus, listTunnels, listQueue, launchSession, queueBounce, queueKeep, resumeSession, killSession, removeSession } from './lib/api.js';
   import { apiErrorMessage } from './lib/apiRequest.mjs';
   import { copyOperatorBriefText, runOperatorRequest, syncIssueItems } from './lib/appShell.mjs';
   import { buildCommandItems } from './lib/commandItems.mjs';
@@ -26,6 +26,7 @@
   import { openExternalUrl } from './lib/externalOpen.mjs';
 
   let sessions = $state([]);
+  let queueJobs = $state([]);        // the overnight ranch: this backend's jobs
   let hosts = $state([]);
   let hostStatuses = $state([]);
   let tunnels = $state([]);
@@ -102,6 +103,8 @@
       } else if (msg.type === 'tunnels') {
         tunnels = msg.tunnels;
         syncErrors = { ...syncErrors, tunnels: '' };
+      } else if (msg.type === 'queue') {
+        queueJobs = msg.queue.jobs || [];
       }
     };
     eventsWs.onclose = () => {
@@ -122,6 +125,7 @@
     } catch (e) {
       syncErrors = { ...syncErrors, sessions: apiErrorMessage(e, 'Could not refresh sessions.') };
     }
+    try { queueJobs = (await listQueue()).jobs || []; } catch (e) {}
   }
   async function loadHosts() {
     try {
@@ -257,6 +261,28 @@
     returnTo = null;
     selected = { ...chatDesc(session), reviewChangesToken: ++handoffSeq };
   };
+  // The overnight ranch's review gate, desktop side. Review opens the landing session with its
+  // changes panel up (the session lives in the worktree, so the diff IS the landing).
+  const reviewQueueJob = (job) => {
+    const s = sessions.find((x) => x.id === job.sessionId);
+    if (s) openSessionChanges(s);
+    else toast('The landing session is gone from the herd.');
+  };
+  async function keepQueueJob(job) {
+    try {
+      const r = await queueKeep(job.id);
+      if (r?.ok) toast('Kept — merged into ' + base(job.dir) + '.');
+      else toast(r?.conflict ? 'Merge refused — the corral/ branch stays for a manual merge.' : 'Keep failed: ' + (r?.error || 'unknown'));
+      await poll();
+    } catch (e) { toast('Keep failed: ' + apiErrorMessage(e, 'unknown')); }
+  }
+  async function bounceQueueJob(job) {
+    try {
+      const r = await queueBounce(job.id);
+      toast(r?.ok ? 'Bounced — worktree and branch removed.' : 'Bounce failed: ' + (r?.error || 'unknown'));
+      await poll();
+    } catch (e) { toast('Bounce failed: ' + apiErrorMessage(e, 'unknown')); }
+  }
   async function stopSession(s) {
     try {
       await killSession(s.id);
@@ -452,12 +478,16 @@
       {:else}
         <Dashboard
           {sessions}
+          {queueJobs}
           {groups}
           {tunnels}
           {recentRoots}
           {hostStatuses}
           {running}
           {syncIssues}
+          onReviewJob={reviewQueueJob}
+          onKeepJob={keepQueueJob}
+          onBounceJob={bounceQueueJob}
           onNewChat={newChat}
           onOpenFiles={openFiles}
           onOpenTunnels={openTunnels}

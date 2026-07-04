@@ -44,6 +44,12 @@ const touch = (s, now = Date.now()) => { if (s) s.updatedAt = now; };
 let onChangeCb = null;
 function onAnyChange(cb) { onChangeCb = cb; }
 const changed = () => { if (onChangeCb) try { onChangeCb(); } catch (e) {} };
+// Session lifecycle hook (the queue subscribes): called on turn end ('result'), process end
+// ('exit') and adapter failure ('fail'). A 'result' subscriber returning true claims the turn —
+// mkIO then skips the generic "is ready" push so the subscriber's own notification replaces it.
+let sessionEventCb = null;
+function onSessionEvent(cb) { sessionEventCb = cb; }
+const sessionEvent = (kind, s, ev) => { if (!sessionEventCb) return false; try { return sessionEventCb(kind, s, ev) === true; } catch (e) { return false; } };
 
 const rosterJson = () => JSON.stringify([...sessions.values()].filter(s => s.sessionId).map(durable).slice(-50));
 // Debounced async persist: coalesce event bursts into one atomic write (tmp + rename) ~500ms out.
@@ -159,8 +165,9 @@ function mkIO(s) {
         if (ev.total_cost_usd != null) s.costUsd = ev.total_cost_usd;
         if (ev.usage) { s.tokIn = (s.tokIn || 0) + (ev.usage.input_tokens || 0); s.tokOut = (s.tokOut || 0) + (ev.usage.output_tokens || 0); }
         persist();
-        // phone push only when nothing follows automatically (a queued follow-up keeps the turn going)
-        if (!(s.inputQueue && s.inputQueue.length)) push.notifySession('done', s, { costUsd: ev.total_cost_usd });
+        // phone push only when nothing follows automatically (a queued follow-up keeps the turn
+        // going), and only when no subscriber claimed the turn (a queue landing buzzes on its own)
+        if (!(s.inputQueue && s.inputQueue.length) && !sessionEvent('result', s, ev)) push.notifySession('done', s, { costUsd: ev.total_cost_usd });
       }
       // Track open permission prompts on the roster record so list()/the events channel can say
       // "waiting on you: Bash — npm test" without every client attaching to the chat stream.
@@ -183,10 +190,12 @@ function mkIO(s) {
     },
     exit(code) {
       s.inputQueue = []; s.status = 'exited'; s.proc = null; s.pid = null; s.pendingPerms = null; emit(s, { type: '_exit', code }); persist();
+      sessionEvent('exit', s, { code });
       if (!s._userEnded) push.notifySession('fail', s, { detail: code != null ? 'exit code ' + code : '' });
     },
     fail(msg) {
       s.inputQueue = []; s.status = 'error'; s.pendingPerms = null; emit(s, { type: '_error', message: msg }); persist();
+      sessionEvent('fail', s, { message: msg });
       push.notifySession('fail-error', s, { detail: msg });
     },
   };
@@ -381,5 +390,5 @@ watchdogTimer.unref?.();                                    // must never keep t
 
 module.exports = { launch, buildSpawn: claude.buildSpawn, resume, loadRoster, parseTranscript: claude.parseTranscript,
   searchHistory: claude.searchHistory, setLabel, cleanLabel,
-  send, respondPermission, interrupt, attach, kill, remove, get, list, killAll, flush, onAnyChange, watchdogVerdict, permSummary,
+  send, respondPermission, interrupt, attach, kill, remove, get, list, killAll, flush, onAnyChange, onSessionEvent, watchdogVerdict, permSummary,
   CLAUDE, SSH, AGENTS, PERM_MODES, PERM_DECISIONS, SAFE_ARG, SAFE_HOST, _sessions: sessions };

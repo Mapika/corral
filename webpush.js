@@ -134,10 +134,10 @@ async function sendTo(sub, payload, urgency) {
 }
 
 // Fan out one notification to every subscribed phone; expired subscriptions are pruned.
-async function notify({ title, body, priority, sessionId } = {}) {
+async function notify({ title, body, priority, sessionId, reviewId } = {}) {
   const targets = subs();
   if (!targets.length) return;
-  const payload = Buffer.from(JSON.stringify({ title: title || 'corral', body: body || '', session: sessionId || null }));
+  const payload = Buffer.from(JSON.stringify({ title: title || 'corral', body: body || '', session: sessionId || null, ...(reviewId ? { review: reviewId } : {}) }));
   const results = await Promise.allSettled(targets.map((s) => sendTo(s, payload, priority)));
   const gone = new Set(targets.filter((s, i) => results[i].status === 'fulfilled' && results[i].value === 'gone').map((s) => s.endpoint));
   if (gone.size) { state.subscriptions = subs().filter((s) => !gone.has(s.endpoint)); save(); }

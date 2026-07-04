@@ -4,7 +4,8 @@
   import { untrack } from 'svelte';
   import { getWebPush, testWebPush, webPushSubscribe, webPushUnsubscribe } from '../lib/api.js';
   import { applicationServerKeyBytes, subscriptionParams } from '../lib/webPushClient.mjs';
-  import { releaseUpdate, sessionFromDeepLink } from '../lib/appUpdate.mjs';
+  import { deepLinkTarget, releaseUpdate } from '../lib/appUpdate.mjs';
+  import { reviewJobs } from '../lib/reviewQueue.mjs';
   import { clearPocket, onPocketState, pocketAvailable, pocketEnabled, pocketLoggedIn, startPocket, stopPocket } from '../lib/pocket.js';
   import { pushOverlay, showToast, toast } from './nav.svelte.js';
   import { parseRanches, RANCHES_KEY, serializeRanches, upsertRanch } from '../lib/ranches.mjs';
@@ -15,6 +16,8 @@
   import Herd from './Herd.svelte';
   import LaunchSheet from './LaunchSheet.svelte';
   import MobileChat from './MobileChat.svelte';
+  import QueueScreen from './QueueScreen.svelte';
+  import ReviewScreen from './ReviewScreen.svelte';
   import SearchScreen from './SearchScreen.svelte';
   import Sheet from './Sheet.svelte';
   import { createMobileData } from './data.svelte.js';
@@ -29,9 +32,12 @@
   let launchRanch = $state('');      // …on the ranch that hit came from
   let searchOpen = $state(false);
   let settingsOpen = $state(false);
-  // #session=<id> deep link — a push notification's Click target. Resolved once the roster
-  // knows the session, then scrubbed from the address.
+  // #session=<id> / #review=<jobId> deep links — a push notification's Click target. Resolved
+  // once the roster/queue knows the target, then scrubbed from the address.
   let deepLink = $state((typeof location !== 'undefined' && (location.hash.match(/[#&]session=([\w-]+)/) || [])[1]) || null);
+  let reviewLink = $state((typeof location !== 'undefined' && (location.hash.match(/[#&]review=([\w-]+)/) || [])[1]) || null);
+  let review = $state(null);         // full-screen review of a landed queue job
+  let queueOpen = $state(false);
 
   // APK version + update check against GitHub releases (standalone shell only).
   const VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev';
@@ -43,7 +49,8 @@
   const data = createMobileData({ standalone });
 
   let liveCount = $derived(data.d.sessions.filter((s) => s.status === 'busy' || s.status === 'starting').length);
-  let needCount = $derived(data.d.sessions.filter((s) => s.pendingPerm || s.status === 'error' || s.status === 'exited').length);
+  let needCount = $derived(data.d.sessions.filter((s) => s.pendingPerm || s.status === 'error' || s.status === 'exited').length
+    + reviewJobs(data.d.queue).length);
   let ranchCount = $derived(data.d.ranches.length);
   // Partial trouble: some ranches unreachable while others answer — worth a word in the header.
   let degraded = $derived(data.d.offlineCount > 0 && !data.d.offline);
@@ -64,25 +71,42 @@
     try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
     openSession(s);
   });
+  $effect(() => {
+    if (!reviewLink) return;
+    const j = data.d.queue.find((x) => x.id === reviewLink);
+    if (!j) return;                  // queue snapshot not in yet — re-runs when it lands
+    reviewLink = null;
+    try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+    review = j;
+  });
 
   // A push notification tapped while the console is already open: the service worker focuses
-  // this window and posts the target session instead of navigating.
+  // this window and posts the target instead of navigating.
   $effect(() => {
     if (standalone || typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
-    const onMsg = (e) => { if (e.data && e.data.type === 'open-session' && e.data.session) deepLink = e.data.session; };
+    const onMsg = (e) => {
+      if (!e.data) return;
+      if (e.data.type === 'open-session' && e.data.session) deepLink = e.data.session;
+      if (e.data.type === 'open-review' && e.data.review) reviewLink = e.data.review;
+    };
     navigator.serviceWorker.addEventListener('message', onMsg);
     return () => navigator.serviceWorker.removeEventListener('message', onMsg);
   });
 
-  // corral://session/<id> — the APK's notification deep link. A cold start arrives via
-  // getCurrent, a running app via onOpenUrl; both funnel into the same roster-resolved deepLink.
+  // corral://session/<id> and corral://review/<jobId> — the APK's notification deep links. A cold
+  // start arrives via getCurrent, a running app via onOpenUrl; both funnel into the same
+  // roster/queue-resolved links.
   $effect(() => {
     if (!standalone || typeof window === 'undefined' || !window.__TAURI_INTERNALS__) return;
     let unlisten = null, gone = false;
     (async () => {
       try {
         const { getCurrent, onOpenUrl } = await import('@tauri-apps/plugin-deep-link');
-        const take = (urls) => { const id = sessionFromDeepLink(urls && urls[0]); if (id) deepLink = id; };
+        const take = (urls) => {
+          const t = deepLinkTarget(urls && urls[0]);
+          if (t && t.kind === 'session') deepLink = t.id;
+          if (t && t.kind === 'review') reviewLink = t.id;
+        };
         take(await getCurrent());
         const un = await onOpenUrl(take);
         if (gone) un(); else unlisten = un;
@@ -187,6 +211,13 @@
       } catch (e) { return; }
     }
     chat = chatDesc(next);
+  }
+  // A review job's transcript: resolve its session in the merged roster (same ranch), then the
+  // normal open path (resumes a dormant one) takes over.
+  function openReviewSession(j) {
+    const s = data.d.sessions.find((x) => x.id === j.sessionId && x.ranch === j.ranch);
+    if (s) openSession(s);
+    else showToast('The session is no longer in the herd.');
   }
   let pocketOn = $state(pocketEnabled());
 
@@ -386,7 +417,8 @@
         </div>
       {/if}
       {#if tab === 'herd'}
-        <Herd {data} onOpenSession={openSession} onLaunch={() => (launchOpen = true)} />
+        <Herd {data} onOpenSession={openSession} onLaunch={() => (launchOpen = true)}
+          onOpenReview={(j) => (review = j)} onOpenQueue={() => (queueOpen = true)} />
       {:else}
         <FleetFeed {data} onOpenSession={openSession} onLaunch={() => (launchOpen = true)} />
       {/if}
@@ -403,6 +435,18 @@
     {#if chat}
       {#key (chat.ranch || '') + ':' + chat.id}
         <MobileChat session={chat} client={data.clientFor(chat.ranch)} onclose={() => { chat = null; data.poll(); }} onchanged={() => data.poll()} />
+      {/key}
+    {/if}
+
+    {#if queueOpen}
+      <QueueScreen {data} onclose={() => (queueOpen = false)} onOpenReview={(j) => (review = j)} />
+    {/if}
+
+    {#if review}
+      {#key (review.ranch || '') + ':' + review.id}
+        <ReviewScreen job={review} client={data.clientFor(review.ranch)}
+          onclose={() => (review = null)} onchanged={() => data.poll()}
+          onOpenSession={(j) => { review = null; queueOpen = false; openReviewSession(j); }} />
       {/key}
     {/if}
 

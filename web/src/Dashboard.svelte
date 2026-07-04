@@ -5,10 +5,12 @@
   import { dashboardSummaryStats, dashboardToday } from './lib/dashboardToday.mjs';
   import { buildHostCards } from './lib/hostHealth.mjs';
   import { operatorAttention, operatorMetrics, sessionUsageTotals } from './lib/operatorStatus.mjs';
+  import { diffstatLabel, jobProject, jobStatusView, pendingJobs, reviewJobs } from './lib/reviewQueue.mjs';
   import { tunnelStatusView } from './lib/tunnelStatus.mjs';
 
   let {
     sessions = [],
+    queueJobs = [],
     groups = [],
     tunnels = [],
     recentRoots = [],
@@ -28,6 +30,9 @@
     onOpenHosts,
     onOpenFleet,
     onRefresh,
+    onReviewJob,
+    onKeepJob,
+    onBounceJob,
   } = $props();
 
   const base = (p) => (p || '').split(/[\\/]/).filter(Boolean).pop() || '~';
@@ -66,10 +71,21 @@
   let attention = $derived(operatorAttention(metrics));
   const fmtTok = (n) => n < 1000 ? String(n) : n < 1e6 ? (n / 1000).toFixed(n < 10000 ? 1 : 0) + 'k' : (n / 1e6).toFixed(1) + 'm';
   let usageTotals = $derived(sessionUsageTotals(sessions));
-  let summaryStats = $derived(usageTotals.tokens
-    ? [...dashboardSummaryStats(metrics), { id: 'tokens', tone: 'quiet', value: fmtTok(usageTotals.tokens), label: usageTotals.costUsd != null ? 'tokens · $' + usageTotals.costUsd.toFixed(2) : 'tokens', action: null }]
-    : dashboardSummaryStats(metrics));
+  let summaryStats = $derived([
+    ...dashboardSummaryStats(metrics),
+    ...(reviewJobs(queueJobs).length ? [{ id: 'landed', tone: 'live', value: reviewJobs(queueJobs).length, label: 'landed', action: null }] : []),
+    ...(usageTotals.tokens ? [{ id: 'tokens', tone: 'quiet', value: fmtTok(usageTotals.tokens), label: usageTotals.costUsd != null ? 'tokens · $' + usageTotals.costUsd.toFixed(2) : 'tokens', action: null }] : []),
+  ]);
   let today = $derived(dashboardToday({ sessions, recentProjects, hostCards, now }));
+  // The overnight ranch: landings owed a look, and what's still queued/cooking.
+  let landings = $derived(reviewJobs(queueJobs));
+  let queueCooking = $derived(pendingJobs(queueJobs));
+  let bounceArmed = $state(null);      // job id — Bounce asks twice, it deletes the branch
+  function bounceTwice(j) {
+    if (bounceArmed !== j.id) { bounceArmed = j.id; setTimeout(() => (bounceArmed = null), 3000); return; }
+    bounceArmed = null;
+    onBounceJob?.(j);
+  }
 
   $effect(() => {
     const t = setInterval(() => (now = Date.now()), 30000);
@@ -99,6 +115,44 @@
       </button>
     {/each}
   </div>
+
+  {#if landings.length || queueCooking.length}
+    <section class="today">
+      <div class="todayhead">
+        <div><span class="sectionlabel">Landed overnight</span></div>
+        {#if queueCooking.length}<span class="cooking">{queueCooking.length} still queued or running</span>{/if}
+      </div>
+      <div class="todaylist">
+        {#each landings as j (j.id)}
+          <article class="todayitem {jobStatusView(j.status).tone === 'ask' ? 'live' : 'alert'}">
+            <button class="todaymain" onclick={() => onReviewJob?.(j)} title={j.prompt}>
+              <span class="dot {jobStatusView(j.status).tone}"></span>
+              <span class="itext">
+                <b>{j.label || jobProject(j)}</b>
+                <small>{jobProject(j)} · {j.diffstat ? diffstatLabel(j.diffstat) : jobStatusView(j.status).label}{j.error ? ' · ' + j.error : ''}</small>
+              </span>
+            </button>
+            <span class="itag">{jobStatusView(j.status).label}</span>
+            <div class="qacts">
+              <button class="iact warniact" class:armed={bounceArmed === j.id} onclick={() => bounceTwice(j)}>{bounceArmed === j.id ? 'Sure?' : 'Bounce'}</button>
+              <button class="iact" onclick={() => onReviewJob?.(j)}>Review</button>
+              {#if j.status !== 'failed'}
+                <button class="iact" onclick={() => onKeepJob?.(j)}>Keep</button>
+              {/if}
+            </div>
+          </article>
+        {/each}
+        {#if !landings.length}
+          <article class="todayitem quiet">
+            <div class="todaymain asdiv">
+              <span class="dot dormant"></span>
+              <span class="itext"><b>The herd is still working.</b><small>{queueCooking.length === 1 ? 'one job' : queueCooking.length + ' jobs'} in tonight's queue — landings appear here.</small></span>
+            </div>
+          </article>
+        {/if}
+      </div>
+    </section>
+  {/if}
 
   <section class="today {attention.tone}">
     <div class="todayhead">
@@ -221,8 +275,20 @@
   .itemtools { display: flex; align-items: center; justify-content: flex-end; gap: 6px; width: 96px; opacity: 0; pointer-events: none; transition: opacity .12s; }
   .todayitem:hover .itemtools, .todayitem:focus-within .itemtools { opacity: 1; pointer-events: auto; }
 
+  /* status dots for today/landing rows (tones from dashboardToday + reviewQueue) */
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); justify-self: center; }
+  .dot.live, .dot.busy { background: var(--mercury); animation: breathe 1.8s ease-in-out infinite; }
+  .dot.alert, .dot.error { background: var(--alert); }
+  .dot.ask { background: var(--alert); animation: breathe 1.4s ease-in-out infinite; }
+  .dot.resume, .dot.dormant { border: 1.5px dashed var(--text-faint); background: transparent; }
+
+  .cooking { margin-left: auto; color: var(--text-faint); font: 11px var(--mono); }
+  .qacts { display: flex; align-items: center; gap: 2px; }
+  .warniact.armed { color: var(--alert) !important; }
+  .todaymain.asdiv { cursor: default; }
+
   @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
-  @media (prefers-reduced-motion: reduce) { .dot.busy, .dot.live { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { .dot.busy, .dot.live, .dot.ask { animation: none; } }
   @media (hover: none), (pointer: coarse) {
     .itemtools { opacity: 1; pointer-events: auto; }
   }

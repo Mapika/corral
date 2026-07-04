@@ -19,6 +19,7 @@ const tunnels = require('./tunnels');
 const pushCfg = require('./push');
 const webpush = require('./webpush');
 const remoteCfg = require('./remote');
+const queue = require('./queue');
 const demo = process.env.CORRAL_DEMO === '1' ? require('./demo') : null;
 
 const SELFTEST = process.argv[2] === 'selftest';
@@ -108,16 +109,9 @@ function buildTermSpawn({ host, target, cwd } = {}) {
   return { bin: SSH, args: ['-tt', host], cwd: undefined };
 }
 
-// Worktree launch (pure -> selftested): the exact `git -C <dir> worktree add` argv for an
-// isolated corral/<slug>-<ts36> branch checked out next to the repo, so an agent can work
-// without touching the operator's tree. argv array only — nothing is interpolated into a shell.
-function buildWorktreeArgs({ dir, repoRoot, now = Date.now() } = {}) {
-  const slug = path.basename(String(dir)).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '') || 'work';
-  const ts = now.toString(36);
-  const branch = `corral/${slug}-${ts}`;
-  const target = path.join(path.dirname(repoRoot), path.basename(repoRoot) + '-corral-' + ts);
-  return { args: ['-C', dir, 'worktree', 'add', '-b', branch, target], target, branch };
-}
+// Worktree launch argv (pure -> selftested) now lives in queue.js — the overnight ranch and the
+// one-off worktree launch share the same corral/<slug>-<ts36> branch-next-to-the-repo recipe.
+const { buildWorktreeArgs } = queue;
 
 // Hosts come from ~/.ssh/config Host aliases (skip wildcards). servers.json, if present,
 // is just an optional extra list of alias strings. No keys/users here — ssh already knows.
@@ -760,6 +754,50 @@ if (SELFTEST) {
   a.equal(wt.target, path.join(path.dirname(wtRepo), 'my-app-corral-' + (1234567).toString(36)));
   a.deepEqual(wt.args, ['-C', wtDir, 'worktree', 'add', '-b', wt.branch, wt.target]);
   a.equal(buildWorktreeArgs({ dir: path.join(wtRepo, '!!!'), repoRoot: wtRepo, now: 1 }).branch, 'corral/work-1');   // all-junk basename falls back
+  // the overnight ranch (queue.js): review-gate git argv builders — argv arrays only, never a shell
+  a.deepEqual(queue.buildWorktreeRemoveArgs({ repoRoot: wtRepo, target: '/x/wt' }), ['-C', wtRepo, 'worktree', 'remove', '/x/wt']);
+  a.deepEqual(queue.buildWorktreeRemoveArgs({ repoRoot: wtRepo, target: '/x/wt', force: true }), ['-C', wtRepo, 'worktree', 'remove', '--force', '/x/wt']);
+  a.deepEqual(queue.buildBranchDeleteArgs({ repoRoot: wtRepo, branch: 'corral/x-1' }), ['-C', wtRepo, 'branch', '-d', 'corral/x-1']);
+  a.deepEqual(queue.buildBranchDeleteArgs({ repoRoot: wtRepo, branch: 'corral/x-1', force: true }), ['-C', wtRepo, 'branch', '-D', 'corral/x-1']);
+  a.deepEqual(queue.buildMergeArgs({ repoRoot: wtRepo, branch: 'corral/x-1', label: 'ship it' }), ['-C', wtRepo, 'merge', '--no-ff', 'corral/x-1', '-m', 'corral: ship it (kept)']);
+  a.deepEqual(queue.buildCommitArgs({ dir: '/x/wt', label: 'ship it' }), ['-C', '/x/wt', 'commit', '-m', 'corral: ship it']);
+  // shortstat parsing: both singular/plural forms, missing sides, garbage
+  a.deepEqual(queue.parseShortstat(' 3 files changed, 120 insertions(+), 30 deletions(-)'), { files: 3, add: 120, del: 30 });
+  a.deepEqual(queue.parseShortstat(' 1 file changed, 2 insertions(+)'), { files: 1, add: 2, del: 0 });
+  a.deepEqual(queue.parseShortstat(' 1 file changed, 1 deletion(-)'), { files: 1, add: 0, del: 1 });
+  a.deepEqual(queue.parseShortstat(''), { files: 0, add: 0, del: 0 });
+  a.equal(queue.diffstatEmpty({ files: 0, add: 0, del: 0, untracked: 0 }), true);
+  a.equal(queue.diffstatEmpty({ files: 0, add: 0, del: 0, untracked: 2 }), false);   // untracked files ARE work
+  a.equal(queue.diffstatEmpty(null), true);
+  // runner gate: sequential, hold-until, nothing to do
+  a.equal(queue.shouldStart({ hold: null, running: false, queued: 2, now: 1000 }), true);
+  a.equal(queue.shouldStart({ hold: null, running: true, queued: 2, now: 1000 }), false);    // one at a time
+  a.equal(queue.shouldStart({ hold: 2000, running: false, queued: 2, now: 1000 }), false);   // held for tonight
+  a.equal(queue.shouldStart({ hold: 500, running: false, queued: 2, now: 1000 }), true);     // hold expired
+  a.equal(queue.shouldStart({ hold: null, running: false, queued: 0, now: 1000 }), false);
+  // boot reconcile: judge a mid-drain crash by the evidence on disk
+  a.equal(queue.reconcileVerdict({ worktreeExists: true, diffEmpty: false }), 'landed');
+  a.equal(queue.reconcileVerdict({ worktreeExists: true, diffEmpty: true }), 'failed');
+  a.equal(queue.reconcileVerdict({ worktreeExists: false, diffEmpty: true }), 'failed');
+  // review-gate verdicts per status
+  a.equal(queue.canKeep('landed') && queue.canKeep('conflict'), true);
+  a.equal(queue.canKeep('failed') || queue.canKeep('queued') || queue.canKeep('kept'), false);
+  a.equal(queue.canBounce('landed') && queue.canBounce('conflict') && queue.canBounce('failed'), true);
+  a.equal(queue.canBounce('running') || queue.canBounce('bounced'), false);
+  a.equal(queue.canRemove('queued') && queue.canRemove('kept') && queue.canRemove('bounced') && queue.canRemove('empty') && queue.canRemove('failed'), true);
+  a.equal(queue.canRemove('running') || queue.canRemove('landed') || queue.canRemove('conflict'), false);   // mid-flight/reviewable: bounce first
+  a.equal(queue.jobLabel('  Fix the flaky test\nand more detail'), 'Fix the flaky test');
+  a.equal(queue.jobLabel('x'.repeat(99)).length, 60);
+  // landed push copy + drain summary (pure)
+  a.equal(pushCfg.diffstatText({ files: 3, add: 120, del: 30 }), '+120 -30 across 3 files');
+  a.equal(pushCfg.diffstatText({ files: 0, add: 0, del: 0, untracked: 1 }), '+0 -0 across 1 file (1 new)');
+  a.equal(pushCfg.messageFor('landed', { agent: 'claude', cwd: '/x/corral' }, { diffstat: { files: 2, add: 14, del: 6 } }).body, 'corral - +14 -6 across 2 files - review when ready');
+  a.equal(pushCfg.queueSummaryText({ landed: 3, failed: 1, empty: 0 }), '3 landed - 1 failed');
+  a.equal(pushCfg.queueSummaryText({}), 'nothing ran');
+  // a landing's click deep-links to the review screen, not the transcript
+  a.equal(pushCfg.notificationExtras({ kind: 'landed', sessionId: 's1', reviewId: 'j1', base: 'http://10.0.0.2:7879', token: 'tok' }).click, 'http://10.0.0.2:7879/#review=j1');
+  a.equal(pushCfg.notificationExtras({ kind: 'landed', sessionId: 's1', reviewId: 'j1', base: 'http://10.0.0.2:7879', token: 'tok', appClick: true }).click, 'corral://review/j1');
+  a.equal(pushCfg.notificationExtras({ kind: 'landed', sessionId: 's1', base: 'http://10.0.0.2:7879', token: 'tok' }).click, 'http://10.0.0.2:7879/#session=s1');   // no job id -> session fallback
   // session labels: pure cleaner (setLabel = cleanLabel + persist, not run here — selftest must never write the roster)
   a.equal(chat.cleanLabel('  ship it  '), 'ship it');
   a.equal(chat.cleanLabel('x'.repeat(80)).length, 60);                       // 60-char cap
@@ -879,6 +917,7 @@ if (SELFTEST) {
 if (!SELFTEST) {
 
 if (!demo) chat.loadRoster();   // re-hydrate past sessions (dormant) so they can be seen and resumed
+if (!demo) queue.init();        // reconcile jobs the last run left mid-drain, then resume draining
 
 // Single-user sidecar: a stray rejection or late stream error in one request must not take down
 // every other live session + tunnel. Log loudly, stay up.
@@ -1154,6 +1193,55 @@ const handleRequest = async (req, res) => {
       return res.end(JSON.stringify({ ok: false, error: String(e.message || e) }));
     }
   }
+  // --- the overnight ranch: a per-backend job queue drained sequentially into git worktrees,
+  // with a keep/bounce review gate (queue.js). All local-only in 0.7, like worktree launches.
+  if (url.pathname === '/api/queue/list') {
+    res.setHeader('content-type', 'application/json');
+    return res.end(JSON.stringify(queue.list()));
+  }
+  if (url.pathname === '/api/queue/add' && req.method === 'POST') {
+    res.setHeader('content-type', 'application/json');
+    try {
+      const job = queue.add({ dir: url.searchParams.get('dir') || '', prompt: url.searchParams.get('prompt') || '',
+        agent: url.searchParams.get('agent') || 'claude', model: url.searchParams.get('model') || null,
+        perm: url.searchParams.get('perm') || 'auto' });
+      return res.end(JSON.stringify({ ok: true, id: job.id }));
+    } catch (e) { res.statusCode = 400; return res.end(JSON.stringify({ ok: false, error: String(e.message || e) })); }
+  }
+  if (url.pathname === '/api/queue/remove' && req.method === 'POST') {
+    const ok = await queue.remove(url.searchParams.get('id'));
+    res.setHeader('content-type', 'application/json');
+    if (!ok) { res.statusCode = 400; return res.end(JSON.stringify({ ok: false, error: 'unknown job or still running/reviewable' })); }
+    return res.end(JSON.stringify({ ok: true }));
+  }
+  if (url.pathname === '/api/queue/move' && req.method === 'POST') {
+    const ok = queue.move(url.searchParams.get('id'), url.searchParams.get('to'));
+    res.setHeader('content-type', 'application/json');
+    return res.end(JSON.stringify({ ok: ok !== false }));
+  }
+  if (url.pathname === '/api/queue/hold' && req.method === 'POST') {
+    const ok = queue.setHold(+url.searchParams.get('until'));
+    res.setHeader('content-type', 'application/json');
+    if (!ok) { res.statusCode = 400; return res.end(JSON.stringify({ ok: false, error: 'until must be a future epoch-ms timestamp' })); }
+    return res.end(JSON.stringify({ ok: true }));
+  }
+  if (url.pathname === '/api/queue/release' && req.method === 'POST') {
+    queue.release();
+    res.setHeader('content-type', 'application/json');
+    return res.end(JSON.stringify({ ok: true }));
+  }
+  if (url.pathname === '/api/queue/keep' && req.method === 'POST') {
+    const r = await queue.keep(url.searchParams.get('id'));
+    res.setHeader('content-type', 'application/json');
+    if (!r.ok) res.statusCode = r.conflict ? 409 : 400;    // 409: merge refused — job degraded to `conflict`
+    return res.end(JSON.stringify(r));
+  }
+  if (url.pathname === '/api/queue/bounce' && req.method === 'POST') {
+    const r = await queue.bounce(url.searchParams.get('id'));
+    res.setHeader('content-type', 'application/json');
+    if (!r.ok) res.statusCode = 400;
+    return res.end(JSON.stringify(r));
+  }
   // answer a pending permission prompt over plain HTTP — the phone's herd view responds in one
   // tap using the requestId surfaced on the roster (list().pendingPerm.id), no chat socket needed
   if (url.pathname === '/api/chat/permission' && req.method === 'POST') {
@@ -1337,6 +1425,7 @@ const debouncedPush = (make, ms = 200) => {
 };
 chat.onAnyChange(debouncedPush(() => ({ type: 'sessions', sessions: chat.list() })));
 tunnels.onChange(debouncedPush(() => ({ type: 'tunnels', tunnels: tunnels.list() })));
+queue.onChange(debouncedPush(() => ({ type: 'queue', queue: queue.list() })));
 eventsWss.on('connection', (ws, req) => {
   if (demo) return demo.handleEvents(ws);
   let authed = !needsAuth(req);
@@ -1345,6 +1434,7 @@ eventsWss.on('connection', (ws, req) => {
     if (ws.readyState !== 1) return;
     ws.send(JSON.stringify({ type: 'sessions', sessions: chat.list() }));    // initial snapshot
     ws.send(JSON.stringify({ type: 'tunnels', tunnels: tunnels.list() }));
+    ws.send(JSON.stringify({ type: 'queue', queue: queue.list() }));
   };
   if (authed) doSub();
   const authTimer = !authed ? setTimeout(() => { if (!authed) ws.close(); }, 5000) : null;
@@ -1436,7 +1526,7 @@ if (!demo) syncRemoteListener();                         // phone pairing left e
 // Kill every child (agent sessions + ssh forwards) and flush the roster on the way out. The
 // 'exit' hook covers any path that actually brings the process down — including a fatal throw —
 // while the uncaughtException handler above deliberately keeps the sidecar alive.
-const cleanup = () => { try { chat.killAll(); } catch (e) {} try { tunnels.killAll(); } catch (e) {} try { poolKillAll(); } catch (e) {} try { chat.flush(); } catch (e) {} };
+const cleanup = () => { try { chat.killAll(); } catch (e) {} try { tunnels.killAll(); } catch (e) {} try { poolKillAll(); } catch (e) {} try { chat.flush(); } catch (e) {} try { queue.flush(); } catch (e) {} };
 const shutdown = () => { cleanup(); process.exit(); };
 process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);
 process.on('exit', cleanup);

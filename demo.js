@@ -216,10 +216,38 @@ function text(res, value, type = 'text/plain; charset=utf-8') {
   res.end(value);
 }
 
+// The overnight ranch, demo-sized: one diff waiting at the review gate, one job still queued.
+// Keep/bounce really resolve (and revive after a minute) so the loop can be recorded end-to-end.
+let demoReviewedAt = 0;
+let demoQueue = () => {
+  const t = now();
+  const reviewed = t - demoReviewedAt < 60_000;
+  return {
+    hold: null,
+    jobs: [
+      {
+        id: 'job-readme', dir: 'E:/Projects/terminal-rancher', prompt: 'Tighten the README install section and fix stale release wording.',
+        label: 'Tighten the README install section', agent: 'claude', model: null, perm: 'auto',
+        status: reviewed ? 'kept' : 'landed', sessionId: 'sess-corral', branch: 'corral/terminal-rancher-demo',
+        worktreeDir: 'E:/Projects/terminal-rancher-corral-demo', repoRoot: 'E:/Projects/terminal-rancher',
+        diffstat: { files: 2, add: 14, del: 6, untracked: 1 }, error: null,
+        createdAt: t - 9 * 3600_000, startedAt: t - 8 * 3600_000, finishedAt: t - 7 * 3600_000, reviewedAt: reviewed ? demoReviewedAt : null,
+      },
+      {
+        id: 'job-flaky', dir: 'E:/Projects/terminal-rancher', prompt: 'Hunt down the flaky reconnect test and make it deterministic.',
+        label: 'Hunt down the flaky reconnect test', agent: 'claude', model: null, perm: 'auto',
+        status: 'queued', sessionId: null, branch: null, worktreeDir: null, repoRoot: null, diffstat: null, error: null,
+        createdAt: t - 2 * 3600_000, startedAt: null, finishedAt: null, reviewedAt: null,
+      },
+    ],
+  };
+};
+
 function snapshotFrames() {
   return [
     { type: 'sessions', sessions: sessions() },
     { type: 'tunnels', tunnels: demoTunnels },
+    { type: 'queue', queue: demoQueue() },
   ];
 }
 
@@ -274,6 +302,14 @@ async function handleApi(req, res, url) {
     broadcast({ type: 'sessions', sessions: sessions() });
     return json(res, { ok: true }), true;
   }
+  if (url.pathname === '/api/queue/list') return json(res, demoQueue()), true;
+  if (url.pathname === '/api/queue/add' && req.method === 'POST') return json(res, { ok: true, id: 'job-flaky' }), true;
+  if ((url.pathname === '/api/queue/keep' || url.pathname === '/api/queue/bounce') && req.method === 'POST') {
+    demoReviewedAt = now();
+    broadcast({ type: 'queue', queue: demoQueue() });
+    return json(res, { ok: true }), true;
+  }
+  if (url.pathname.startsWith('/api/queue/') && req.method === 'POST') return json(res, { ok: true }), true;
   if (url.pathname === '/api/remote') return json(res, { ok: true, enabled: true, port: 7879, running: true, error: '', addresses: ['192.168.1.20'], token: 'demo0token0demo0token0demo0token0demo0token0demo0token0demo0abcd' }), true;
   if (url.pathname === '/api/history/search') return json(res, { hits: [] }), true;
   if (url.pathname === '/api/push') return json(res, { enabled: false, server: 'https://ntfy.sh', topic: '', events: { input: true, done: true, fail: true } }), true;

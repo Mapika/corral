@@ -6,6 +6,7 @@
   import { LAUNCH_DEFAULTS_KEY, launchDefaultsFor, parseLaunchDefaults, rememberLaunchDefaults, serializeLaunchDefaults } from '../lib/launchDefaults.mjs';
   import { AGENTS, MODELS, PERMS } from '../lib/launchOptions.mjs';
   import { recentRootsForHost } from '../lib/recentRoots.mjs';
+  import { showToast } from './nav.svelte.js';
   import Sheet from './Sheet.svelte';
 
   let { data, onclose, onLaunched, initialDir = '', initialBrief = '', initialRanch = '' } = $props();
@@ -77,6 +78,27 @@
       busy = false;
     }
   }
+
+  // The overnight ranch: same form, but the job waits its turn in the queue and runs in its own
+  // worktree — local projects on the picked ranch only, and it needs an instruction to run on.
+  let canQueue = $derived(sel?.host === 'local' && !!brief.trim());
+  async function queueIt() {
+    if (!sel || !canQueue) return;
+    const target = dir.trim() || sel.home;
+    busy = true; error = '';
+    try {
+      const r = await data.clientFor(sel.ranch).queueAdd({ dir: target, prompt: brief.trim(), agent, model: model || undefined, perm });
+      if (r?.ok === false) throw new Error(r.error || 'queue failed');
+      data.rememberRoot(sel.ranch, sel.host, target);
+      await data.poll();
+      showToast('Queued — it runs in its own worktree and lands on your phone.');
+      onclose?.();
+    } catch (e) {
+      error = apiErrorMessage(e, 'Could not queue it.');
+    } finally {
+      busy = false;
+    }
+  }
 </script>
 
 <Sheet {onclose} label="Ranch an agent">
@@ -135,6 +157,9 @@
 
     {#if error}<p class="err">{error}</p>{/if}
     <button class="go" onclick={go} disabled={busy}>{busy ? 'Ranching…' : 'Ranch'}</button>
+    {#if canQueue}
+      <button class="queue" onclick={queueIt} disabled={busy}>Queue for tonight</button>
+    {/if}
   </div>
 </Sheet>
 
@@ -166,4 +191,6 @@
   .err { margin: 12px 0 0; color: var(--alert); font-size: 12.5px; }
   .go { margin-top: var(--s4); min-height: 52px; background: var(--paper); color: var(--ink); border: 0; border-radius: var(--pill); font: var(--w-med) 15px var(--sans); cursor: pointer; }
   .go:disabled { opacity: .5; }
+  .queue { margin-top: var(--s2); min-height: 48px; background: var(--chip); color: var(--text); border: 0; border-radius: var(--pill); font: var(--w-reg) 14px var(--sans); cursor: pointer; }
+  .queue:disabled { opacity: .5; }
 </style>

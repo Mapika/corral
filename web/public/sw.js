@@ -71,20 +71,24 @@ self.addEventListener('push', (e) => {
     body: d.body || '',
     icon: '/icon-192.png',
     badge: '/icon-192.png',
-    tag: d.session ? 'corral-' + d.session : 'corral',   // one notification per session, not a pile
-    data: { session: d.session || null },
+    tag: d.review ? 'corral-review-' + d.review : d.session ? 'corral-' + d.session : 'corral',   // one notification per session/landing, not a pile
+    data: { session: d.session || null, review: d.review || null },
   }));
 });
 
+// A tap lands on the session — or, for a queue landing ({review} in the payload), straight on
+// the review screen.
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const id = e.notification.data && e.notification.data.session;
+  const d = e.notification.data || {};
   e.waitUntil((async () => {
     const wins = await clients.matchAll({ type: 'window', includeUncontrolled: true });
     if (wins.length) {
-      if (id) wins[0].postMessage({ type: 'open-session', session: id });
+      if (d.review) wins[0].postMessage({ type: 'open-review', review: d.review });
+      else if (d.session) wins[0].postMessage({ type: 'open-session', session: d.session });
       return wins[0].focus();
     }
-    return clients.openWindow(id ? '/#session=' + encodeURIComponent(id) : '/');
+    return clients.openWindow(d.review ? '/#review=' + encodeURIComponent(d.review)
+      : d.session ? '/#session=' + encodeURIComponent(d.session) : '/');
   })());
 });

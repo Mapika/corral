@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { compareVersions, releaseUpdate, sessionFromDeepLink } from './appUpdate.mjs';
+import { compareVersions, releaseUpdate, sessionFromDeepLink, deepLinkTarget } from './appUpdate.mjs';
 
 // compareVersions: dotted numerics, v-prefix tolerated, missing parts are zero
 assert.equal(compareVersions('0.4.0', '0.3.0'), 1);
@@ -29,5 +29,11 @@ assert.equal(sessionFromDeepLink('corral://other/abc'), null);
 assert.equal(sessionFromDeepLink('https://example.com/#session=abc'), null);
 assert.equal(sessionFromDeepLink(''), null);
 assert.equal(sessionFromDeepLink(null), null);
+
+// deepLinkTarget: session AND review (queue landing) targets
+assert.deepEqual(deepLinkTarget('corral://review/j-9'), { kind: 'review', id: 'j-9' });
+assert.deepEqual(deepLinkTarget('corral://session/abc'), { kind: 'session', id: 'abc' });
+assert.equal(deepLinkTarget('corral://other/abc'), null);
+assert.equal(deepLinkTarget(''), null);
 
 console.log('appUpdate tests ok');

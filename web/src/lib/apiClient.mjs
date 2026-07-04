@@ -135,6 +135,22 @@ export function createApiClient({ getBase = () => '', getToken = () => '' } = {}
     return authed(new WebSocket(wsUrl(getBase(), '/ws?' + q.toString())));
   }
 
+  // --- the overnight ranch (per-backend job queue + review gate) ---
+  async function listQueue() { return json('/api/queue/list', { fallback: { hold: null, jobs: [] } }); }
+  async function queueAdd({ dir, prompt, agent, model, perm } = {}) {
+    const q = new URLSearchParams({ dir: dir || '', prompt: prompt || '' });
+    if (agent) q.set('agent', agent);
+    if (model) q.set('model', model);
+    if (perm) q.set('perm', perm);
+    return json('/api/queue/add?' + q.toString(), { method: 'POST', retries: 0 });
+  }
+  async function queueRemove(id) { return json('/api/queue/remove?id=' + encodeURIComponent(id), { method: 'POST', retries: 0 }); }
+  async function queueMove(id, to) { return json('/api/queue/move?id=' + encodeURIComponent(id) + '&to=' + encodeURIComponent(to), { method: 'POST', retries: 0 }); }
+  async function queueHold(until) { return json('/api/queue/hold?until=' + encodeURIComponent(until), { method: 'POST', retries: 0 }); }
+  async function queueRelease() { return json('/api/queue/release', { method: 'POST', retries: 0 }); }
+  async function queueKeep(id) { return json('/api/queue/keep?id=' + encodeURIComponent(id), { method: 'POST', retries: 0 }); }
+  async function queueBounce(id) { return json('/api/queue/bounce?id=' + encodeURIComponent(id), { method: 'POST', retries: 0 }); }
+
   // --- remote access (phone pairing) — loopback/desktop only; the server hides secrets otherwise ---
   async function getRemoteConfig() { return json('/api/remote'); }
   async function setRemoteConfig({ enabled, rotate, certPath, keyPath } = {}) {
@@ -182,6 +198,7 @@ export function createApiClient({ getBase = () => '', getToken = () => '' } = {}
     listSessions, listHosts, listServerStatus, launchSession, searchHistory,
     setSessionLabel, killSession, interruptSession, removeSession, resumeSession, respondPermission,
     lsDir, fileUrl, dirDownloadUrl, fileText, mkdir, renameItem, deleteItem, gitDiff, uploadFile,
+    listQueue, queueAdd, queueRemove, queueMove, queueHold, queueRelease, queueKeep, queueBounce,
     chatSocket, eventsSocket, termSocket,
     getRemoteConfig, setRemoteConfig,
     getPushConfig, setPushConfig, testPush,
