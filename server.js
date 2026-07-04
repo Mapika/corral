@@ -438,6 +438,33 @@ if (SELFTEST) {
   a.equal(parseBatteryLinux(['Full\n', 'Charging\n']), false);
   a.equal(parseBatteryLinux([]), null);
   a.deepEqual(macsOf({ eth0: [{ mac: 'aa:bb:cc:dd:ee:ff', internal: false }], lo: [{ mac: '00:00:00:00:00:00', internal: true }] }), ['aa:bb:cc:dd:ee:ff']);
+  // Bundle-manifest guard (learned at 0.6.1 on desktop, relearned at 0.8.2 on pocket): every
+  // root module the backend transitively requires must ship in BOTH the desktop resources
+  // (tauri.conf.json) and the pocket payload (prepare-pocket.mjs) — a missing entry crashes
+  // the packaged app at its first require() with nothing but a dead tray icon / boot toast.
+  {
+    const read = f => fs.readFileSync(path.join(__dirname, f), 'utf8');
+    const localRequires = text => [...text.matchAll(/require\('\.\/([\w/-]+)'\)/g)].map(m => m[1]);
+    const seen = new Set();
+    const walk = ['server'];
+    while (walk.length) {
+      const m = walk.pop();
+      if (seen.has(m)) continue;
+      seen.add(m);
+      // './common' inside agents/claude.js means agents/common — resolve against the requirer
+      const dir = m.includes('/') ? m.slice(0, m.lastIndexOf('/') + 1) : '';
+      for (const r of localRequires(read(m + '.js'))) walk.push(dir + r);
+    }
+    seen.delete('server');
+    seen.delete('demo');                              // env-gated (CORRAL_DEMO) and desktop-only by design
+    const tops = new Set([...seen].map(m => m.split('/')[0]));   // agents/claude -> the agents dir
+    const resources = Object.values(JSON.parse(read(path.join('src-tauri', 'tauri.conf.json'))).bundle.resources);
+    const pocketManifest = read(path.join('scripts', 'prepare-pocket.mjs'));
+    for (const t of tops) {
+      a.ok(resources.includes(t + '.js') || resources.includes(t), 'tauri.conf resources is missing backend module: ' + t);
+      a.ok(pocketManifest.includes(`'${t}.js'`) || pocketManifest.includes(`'${t}'`), 'prepare-pocket.mjs is missing backend module: ' + t);
+    }
+  }
   // pocket CONNECT proxy: 443-only, never a relay to loopback/private targets
   const { parseConnectTarget } = require('./connectproxy');
   a.deepEqual(parseConnectTarget('api.anthropic.com:443'), { host: 'api.anthropic.com', port: 443 });

@@ -17,7 +17,10 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const pocket = join(root, 'src-tauri', 'pocket');
 const stage = join(pocket, 'stage');
 
-const FILES = ['server.js', 'chat.js', 'connectproxy.js', 'phone.js', 'remote.js', 'push.js', 'webpush.js', 'tunnels.js', 'package.json'];
+// The backend's whole root require() graph must be here — server.js's selftest cross-checks
+// this list (and tauri.conf resources) against the actual requires, so a new root module
+// fails the build loudly instead of crashing the phone at boot (0.6.1 desktop, 0.8.2 pocket).
+const FILES = ['server.js', 'chat.js', 'queue.js', 'projects.js', 'wake.js', 'connectproxy.js', 'phone.js', 'remote.js', 'push.js', 'webpush.js', 'tunnels.js', 'package.json'];
 const DIRS = ['agents', join('node_modules', 'ws')];
 
 rmSync(stage, { recursive: true, force: true });
